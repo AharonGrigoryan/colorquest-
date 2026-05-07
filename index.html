@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ColorQuest — Color By Number Generator</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --bg-2: #13131c;
+    --ink: #f4f1ea;
+    --ink-dim: #8a8896;
+    --ink-faint: #44444f;
+    --accent: #ffcb47;
+    --accent-2: #ff5c8a;
+    --accent-3: #4ecdc4;
+    --line: #25252f;
+    --line-2: #1a1a24;
+    --danger: #ff5c5c;
+    --success: #4ecdc4;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--ink); font-family: 'Fraunces', serif; min-height: 100vh; }
+  body {
+    background-image:
+      radial-gradient(ellipse at 20% 0%, rgba(255, 92, 138, 0.10), transparent 50%),
+      radial-gradient(ellipse at 80% 100%, rgba(78, 205, 196, 0.08), transparent 50%),
+      radial-gradient(ellipse at 100% 30%, rgba(255, 203, 71, 0.06), transparent 50%);
+    background-attachment: fixed;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 32px 20px 64px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 16px; border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 28px; }
+  .logo { font-family: 'Fraunces', serif; font-weight: 800; font-size: clamp(28px, 5vw, 44px); letter-spacing: -0.02em; line-height: 1; }
+  .logo .quest { font-style: italic; background: linear-gradient(120deg, var(--accent-2), var(--accent)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .logo .dot { color: var(--accent); }
+  .tag { font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-dim); }
+  .lede { font-size: clamp(15px, 1.6vw, 17px); line-height: 1.5; max-width: 640px; color: var(--ink-dim); margin-bottom: 32px; }
+  .lede em { color: var(--ink); font-style: italic; }
+
+  .grid-layout { display: grid; grid-template-columns: minmax(0, 380px) 1fr; gap: 28px; align-items: start; }
+  @media (max-width: 880px) { .grid-layout { grid-template-columns: 1fr; } }
+
+  .panel { background: linear-gradient(180deg, var(--bg-2), #0e0e16); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+  .panel-title { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--ink-dim); margin-bottom: 18px; display: flex; align-items: center; gap: 10px; }
+  .panel-title::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+  .tabs { display: flex; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+  .tabs button { background: none; border: none; border-bottom: 2px solid transparent; color: var(--ink-dim); font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; padding: 10px 14px; cursor: pointer; margin-bottom: -1px; }
+  .tabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
+
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-dim); margin-bottom: 6px; }
+  .field input[type=number], .field input[type=text], .field select, .field input[type=file] {
+    width: 100%; background: #08080d; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+    color: var(--ink); font-family: 'JetBrains Mono', monospace; font-size: 13px; transition: border-color .15s;
+  }
+  .field input:focus, .field select:focus { outline: none; border-color: var(--accent); }
+  .field input[type=file] { padding: 8px; cursor: pointer; }
+  .field input[type=file]::file-selector-button { background: var(--line); color: var(--ink); border: none; padding: 4px 10px; border-radius: 5px; margin-right: 10px; font-family: 'JetBrains Mono', monospace; font-size: 10px; cursor: pointer; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .hint { font-size: 11px; color: var(--ink-dim); margin-top: 4px; line-height: 1.4; font-family: 'JetBrains Mono', monospace; }
+
+  .shape-pick, .diff-pick { display: grid; gap: 6px; }
+  .shape-pick { grid-template-columns: repeat(3, 1fr); }
+  .diff-pick { grid-template-columns: repeat(2, 1fr); }
+  .shape-pick button, .diff-pick button {
+    background: #08080d; border: 1px solid var(--line); border-radius: 8px; padding: 10px 6px;
+    color: var(--ink-dim); font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    transition: all .15s;
+  }
+  .shape-pick button svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.4; }
+  .shape-pick button:hover, .diff-pick button:hover { border-color: var(--ink-dim); color: var(--ink); }
+  .shape-pick button.on, .diff-pick button.on { border-color: var(--accent); color: var(--accent); background: rgba(255, 203, 71, 0.06); }
+  .diff-pick button .lbl { color: var(--ink); font-weight: 600; font-size: 12px; letter-spacing: 0.04em; }
+  .diff-pick button .det { font-size: 9px; color: var(--ink-faint); }
+  .diff-pick button.on .lbl { color: var(--accent); }
+
+  .thumbs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 8px; }
+  .thumb { position: relative; aspect-ratio: 1; border-radius: 6px; overflow: hidden; background: #08080d; border: 1px solid var(--line); }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .thumb .rm { position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; border-radius: 50%; background: rgba(0,0,0,0.85); color: #fff; border: none; font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; line-height: 1; }
+  .thumb .num { position: absolute; bottom: 2px; left: 2px; background: rgba(0,0,0,0.85); color: #fff; font-size: 9px; padding: 1px 4px; border-radius: 3px; font-family: 'JetBrains Mono', monospace; }
+
+  details summary { cursor: pointer; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-dim); padding: 8px 0; list-style: none; }
+  details summary::before { content: '+ '; color: var(--accent); }
+  details[open] summary::before { content: '− '; }
+
+  .actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .actions button { flex: 1; min-width: 90px; padding: 11px 14px; border: none; border-radius: 8px; font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer; transition: filter .15s, transform .1s; }
+  .btn-primary { background: linear-gradient(120deg, var(--accent-2), var(--accent)); color: #1a0a14; font-weight: 600; }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+  .btn-primary:active { transform: translateY(1px); }
+  .btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .progress { height: 3px; background: #08080d; border-radius: 2px; overflow: hidden; margin-top: 10px; }
+  .progress-bar { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+
+  .status { margin-top: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-dim); letter-spacing: 0.04em; min-height: 16px; line-height: 1.4; }
+  .status.err { color: var(--danger); }
+  .status.ok { color: var(--success); }
+
+  .dl-link { display: block; margin-top: 8px; padding: 12px; text-align: center; background: rgba(255, 203, 71, 0.10); color: var(--accent); border-radius: 8px; text-decoration: none; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; border: 1px solid rgba(255, 203, 71, 0.35); }
+  .dl-link:hover { background: rgba(255, 203, 71, 0.16); }
+  .dl-link .sub { display: block; font-size: 10px; color: var(--ink-dim); margin-top: 4px; font-weight: 400; letter-spacing: 0.04em; }
+
+  .pages { display: flex; flex-direction: column; gap: 16px; }
+  .page-block { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+  .page-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-dim); flex-wrap: wrap; gap: 8px; }
+  .page-head .nm { color: var(--ink); font-weight: 500; }
+  .toggle-row { display: flex; gap: 6px; align-items: center; }
+  .toggle-row .meta { font-size: 10px; }
+  .toggle { background: #08080d; border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font-size: 10px; letter-spacing: 0.05em; color: var(--ink-dim); cursor: pointer; font-family: 'JetBrains Mono', monospace; }
+  .toggle.on { background: rgba(255, 203, 71, 0.10); color: var(--accent); border-color: var(--accent); }
+
+  .stage { background: #000; border-radius: 10px; padding: 8px; min-height: 200px; display: flex; align-items: center; justify-content: center; overflow: auto; }
+  .stage canvas { max-width: 100%; height: auto; display: block; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+  .swatch { display: flex; align-items: center; gap: 5px; background: #0e0e16; border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+  .swatch .chip { width: 13px; height: 13px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.15); }
+  .swatch .num { color: var(--ink-dim); }
+
+  .empty { color: var(--ink-faint); font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; text-align: center; padding: 60px 20px; line-height: 1.6; }
+  .empty .big { display: block; font-family: 'Fraunces', serif; font-style: italic; font-size: 24px; color: #2a2a36; text-transform: none; letter-spacing: -0.01em; margin-bottom: 10px; }
+
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--ink-dim); font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.08em; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">Color<span class="quest">Quest</span><span class="dot">.</span></div>
+    <div class="tag">Color-by-number generator</div>
+  </header>
+
+  <p class="lede">
+    Build your own <em>color-by-number</em> page from any image, or from scratch.
+    Pick a difficulty, choose a shape, print the PDF — and color your way through it.
+  </p>
+
+  <div class="grid-layout">
+    <!-- LEFT: CONTROLS -->
+    <section class="panel">
+      <div class="panel-title">Configure</div>
+
+      <div class="tabs" id="tabs">
+        <button class="on" data-tab="image">From images</button>
+        <button data-tab="manual">From scratch</button>
+      </div>
+
+      <div class="pane" data-pane="image">
+        <div class="field">
+          <label>Source images (1–10)</label>
+          <input type="file" id="imgInput" accept="image/*" multiple>
+          <div class="hint">Cartoons and flat illustrations work best. Up to 10 images per PDF.</div>
+          <div class="thumbs" id="thumbs" style="display:none"></div>
+        </div>
+      </div>
+
+      <div class="pane" data-pane="manual" style="display:none">
+        <div class="field">
+          <label>Pattern</label>
+          <select id="manualPattern">
+            <option value="random">Random colorful</option>
+            <option value="gradient">Gradient sweep</option>
+            <option value="rings">Concentric rings</option>
+            <option value="stripes">Diagonal stripes</option>
+            <option value="checker">Checkerboard</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Difficulty</label>
+        <div class="diff-pick" id="diffPick">
+          <button data-diff="easy" data-w="30" data-h="40" data-k="8"><span class="lbl">Easy</span><span class="det">30×40 · 8 colors</span></button>
+          <button class="on" data-diff="medium" data-w="45" data-h="60" data-k="14"><span class="lbl">Medium</span><span class="det">45×60 · 14 colors</span></button>
+          <button data-diff="hard" data-w="60" data-h="80" data-k="20"><span class="lbl">Hard</span><span class="det">60×80 · 20 colors</span></button>
+          <button data-diff="custom"><span class="lbl">Custom</span><span class="det">your numbers</span></button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Cell shape</label>
+        <div class="shape-pick" id="shapePick">
+          <button class="on" data-shape="circle"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>Circle</button>
+          <button data-shape="triangle"><svg viewBox="0 0 24 24"><path d="M12 3 L21 20 L3 20 Z"/></svg>Triangle</button>
+          <button data-shape="hexagon"><svg viewBox="0 0 24 24"><path d="M12 2 L21 7 L21 17 L12 22 L3 17 L3 7 Z"/></svg>Hexagon</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Page size</label>
+        <select id="pageSize">
+          <optgroup label="Inches">
+            <option value="6x9">6 × 9 in</option>
+            <option value="7x10">7 × 10 in</option>
+            <option value="8.5x11" selected>8.5 × 11 in (US Letter)</option>
+          </optgroup>
+          <optgroup label="Metric">
+            <option value="a4">A4 (210 × 297 mm)</option>
+            <option value="a3">A3 (297 × 420 mm)</option>
+          </optgroup>
+        </select>
+      </div>
+
+      <details id="advWrap">
+        <summary>Advanced settings</summary>
+        <div class="row" style="margin-top:8px;">
+          <div class="field">
+            <label>Width (cells)</label>
+            <input type="number" id="gridW" value="45" min="10" max="120">
+          </div>
+          <div class="field">
+            <label>Height (cells)</label>
+            <input type="number" id="gridH" value="60" min="10" max="160">
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Colors</label>
+            <input type="number" id="numColors" value="14" min="2" max="36">
+          </div>
+          <div class="field">
+            <label>Background</label>
+            <select id="bgMode">
+              <option value="black">Black</option>
+              <option value="white">White</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Cleanup</label>
+          <select id="cleanup">
+            <option value="0" selected>Off — keep all details</option>
+            <option value="1">Light — remove 1-cell artifacts</option>
+            <option value="3">Strong — remove up to 3-cell artifacts</option>
+          </select>
+          <div class="hint">Use Off for Easy difficulty (small details matter). Light is safe for Medium/Hard cartoons.</div>
+        </div>
+      </details>
+
+      <div class="actions">
+        <button class="btn-primary" id="generateBtn">Generate</button>
+        <button class="btn-ghost" id="pdfBtn" disabled>Build PDF</button>
+        <button class="btn-ghost" id="pngBtn" disabled>Build PNG</button>
+      </div>
+      <div class="progress" id="progress" style="display:none"><div class="progress-bar" id="progressBar"></div></div>
+      <div class="status" id="status">Pick difficulty and one or more images, then press generate.</div>
+      <div id="dlOut"></div>
+    </section>
+
+    <!-- RIGHT: PAGES -->
+    <section>
+      <div class="pages" id="pages">
+        <div class="empty">
+          <span class="big">a quiet little ritual</span>
+          configure on the left<br>and press generate
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <span>Made for printing · runs entirely in your browser</span>
+    <span>ColorQuest // 2026</span>
+  </footer>
+</div>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const state = { shape: 'circle', mode: 'image', images: [], results: [], diff: 'medium' };
+
+  /* Common marker colors (~36 entries from typical Touch/Stabilo/Crayola sets) */
+  const STANDARD_MARKERS = [
+    [0, 0, 0], [50, 50, 50], [120, 120, 120], [200, 200, 200], [255, 255, 255],
+    [80, 35, 20], [120, 65, 30], [170, 110, 60], [220, 180, 130], [255, 220, 180],
+    [200, 30, 30], [240, 80, 60], [255, 140, 100], [200, 80, 30], [255, 130, 30],
+    [255, 180, 50], [255, 220, 70], [255, 250, 150], [200, 220, 60], [120, 180, 60],
+    [40, 130, 50], [100, 200, 130], [60, 180, 200], [100, 200, 230], [60, 130, 220],
+    [30, 70, 180], [120, 90, 200], [180, 120, 220], [220, 100, 180], [255, 180, 210],
+    [150, 30, 80], [200, 100, 140], [90, 60, 30], [50, 90, 70], [180, 200, 180], [40, 30, 60],
+  ];
+
+  /* ---------- UI wiring ---------- */
+  document.querySelectorAll('#tabs button').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('#tabs button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      state.mode = b.dataset.tab;
+      document.querySelectorAll('.pane').forEach(p => {
+        p.style.display = p.dataset.pane === state.mode ? '' : 'none';
+      });
+    };
+  });
+  document.querySelectorAll('#shapePick button').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('#shapePick button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      state.shape = b.dataset.shape;
+    };
+  });
+  document.querySelectorAll('#diffPick button').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('#diffPick button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      state.diff = b.dataset.diff;
+      if (state.diff !== 'custom') {
+        $('gridW').value = b.dataset.w; $('gridH').value = b.dataset.h; $('numColors').value = b.dataset.k;
+      } else { $('advWrap').open = true; }
+    };
+  });
+
+  $('imgInput').onchange = async (e) => {
+    const files = Array.from(e.target.files || []).slice(0, 10);
+    state.images = [];
+    if (files.length === 0) { $('thumbs').style.display = 'none'; return; }
+    setStatus('Loading ' + files.length + ' image(s)...');
+    for (const f of files) {
+      try { const img = await loadImageFile(f); state.images.push({ img, name: f.name }); }
+      catch (err) { console.warn('skip', f.name, err); }
+    }
+    renderThumbs();
+    setStatus(state.images.length + ' image(s) ready. Press generate.');
+  };
+
+  function loadImageFile(file) {
+    return new Promise((res, rej) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); res(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('load failed')); };
+      img.src = url;
+    });
+  }
+
+  function renderThumbs() {
+    const t = $('thumbs'); t.innerHTML = '';
+    if (state.images.length === 0) { t.style.display = 'none'; return; }
+    t.style.display = 'grid';
+    state.images.forEach((it, i) => {
+      const div = document.createElement('div'); div.className = 'thumb';
+      const img = document.createElement('img'); img.src = it.img.src; div.appendChild(img);
+      const num = document.createElement('span'); num.className = 'num'; num.textContent = (i+1); div.appendChild(num);
+      const rm = document.createElement('button'); rm.className = 'rm'; rm.textContent = '×';
+      rm.onclick = () => { state.images.splice(i, 1); renderThumbs(); setStatus(state.images.length + ' image(s) ready.'); };
+      div.appendChild(rm); t.appendChild(div);
+    });
+  }
+
+  function setStatus(msg, kind) {
+    const s = $('status'); s.textContent = msg;
+    s.classList.remove('err', 'ok');
+    if (kind) s.classList.add(kind);
+  }
+
+  /* ---------- Color helpers ---------- */
+  function rgbToHsl(r, g, b) {
+    r/=255; g/=255; b/=255;
+    const max = Math.max(r,g,b), min = Math.min(r,g,b);
+    let h, s, l = (max+min)/2;
+    if (max === min) { h = s = 0; }
+    else {
+      const d = max - min;
+      s = l > 0.5 ? d/(2-max-min) : d/(max+min);
+      if (max === r) h = (g-b)/d + (g<b?6:0);
+      else if (max === g) h = (b-r)/d + 2;
+      else h = (r-g)/d + 4;
+      h /= 6;
+    }
+    return [h, s, l];
+  }
+  function hslToRgb(h, s, l) {
+    let r, g, b;
+    if (s === 0) { r = g = b = l; }
+    else {
+      const hue2rgb = (p, q, t) => {
+        if (t < 0) t += 1; if (t > 1) t -= 1;
+        if (t < 1/6) return p + (q-p)*6*t;
+        if (t < 1/2) return q;
+        if (t < 2/3) return p + (q-p)*(2/3-t)*6;
+        return p;
+      };
+      const q = l < 0.5 ? l*(1+s) : l + s - l*s;
+      const p = 2*l - q;
+      r = hue2rgb(p,q,h+1/3); g = hue2rgb(p,q,h); b = hue2rgb(p,q,h-1/3);
+    }
+    return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
+  }
+  function clamp255(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+
+  function boostSaturation(data, boost) {
+    for (let i = 0; i < data.length; i += 4) {
+      const [h, s, l] = rgbToHsl(data[i], data[i+1], data[i+2]);
+      const newS = Math.min(1, s * boost);
+      const [r, g, b] = hslToRgb(h, newS, l);
+      data[i] = r; data[i+1] = g; data[i+2] = b;
+    }
+  }
+
+  function sharpen(data, w, h, amount) {
+    const blur = boxBlur(data.slice(0), w, h, 1);
+    for (let i = 0; i < data.length; i += 4) {
+      data[i]   = clamp255(data[i]   + amount * (data[i]   - blur[i]));
+      data[i+1] = clamp255(data[i+1] + amount * (data[i+1] - blur[i+1]));
+      data[i+2] = clamp255(data[i+2] + amount * (data[i+2] - blur[i+2]));
+    }
+  }
+
+  function boxBlur(data, w, h, radius) {
+    const r = Math.round(radius);
+    if (r < 1) return data;
+    const tmp = new Uint8ClampedArray(data.length);
+    const out = new Uint8ClampedArray(data.length);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let sr=0,sg=0,sb=0,n=0;
+        for (let dx=-r; dx<=r; dx++) {
+          const xx = Math.min(w-1, Math.max(0, x+dx));
+          const i = (y*w + xx)*4;
+          sr+=data[i]; sg+=data[i+1]; sb+=data[i+2]; n++;
+        }
+        const i = (y*w + x)*4;
+        tmp[i]=sr/n; tmp[i+1]=sg/n; tmp[i+2]=sb/n; tmp[i+3]=255;
+      }
+    }
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let sr=0,sg=0,sb=0,n=0;
+        for (let dy=-r; dy<=r; dy++) {
+          const yy = Math.min(h-1, Math.max(0, y+dy));
+          const i = (yy*w + x)*4;
+          sr+=tmp[i]; sg+=tmp[i+1]; sb+=tmp[i+2]; n++;
+        }
+        const i = (y*w + x)*4;
+        out[i]=sr/n; out[i+1]=sg/n; out[i+2]=sb/n; out[i+3]=255;
+      }
+    }
+    return out;
+  }
+
+  /* ---------- K-means with anchored centers ---------- */
+  function quantize(samples, k, fixedCenters, iters) {
+    iters = iters || 8;
+    fixedCenters = fixedCenters || [];
+    const N = samples.length;
+    const centers = fixedCenters.map(c => c.slice());
+    while (centers.length < k) {
+      const dists = samples.map(s => {
+        let m = Infinity;
+        for (const c of centers) {
+          const d = (s[0]-c[0])*(s[0]-c[0]) + (s[1]-c[1])*(s[1]-c[1]) + (s[2]-c[2])*(s[2]-c[2]);
+          if (d < m) m = d;
+        }
+        return m;
+      });
+      const total = dists.reduce((a,b)=>a+b,0);
+      if (total === 0) break;
+      let r = Math.random() * total, idx = 0;
+      for (let i = 0; i < N; i++) { r -= dists[i]; if (r <= 0) { idx = i; break; } }
+      centers.push(samples[idx].slice());
+    }
+    const labels = new Int32Array(N);
+    const numFixed = fixedCenters.length;
+    for (let it = 0; it < iters; it++) {
+      for (let i = 0; i < N; i++) {
+        const s = samples[i];
+        let m = Infinity, mi = 0;
+        for (let j = 0; j < centers.length; j++) {
+          const c = centers[j];
+          const d = (s[0]-c[0])*(s[0]-c[0]) + (s[1]-c[1])*(s[1]-c[1]) + (s[2]-c[2])*(s[2]-c[2]);
+          if (d < m) { m = d; mi = j; }
+        }
+        labels[i] = mi;
+      }
+      const sums = centers.map(()=>[0,0,0,0]);
+      for (let i = 0; i < N; i++) {
+        const l = labels[i], s = samples[i];
+        sums[l][0]+=s[0]; sums[l][1]+=s[1]; sums[l][2]+=s[2]; sums[l][3]++;
+      }
+      for (let j = numFixed; j < centers.length; j++) {
+        if (sums[j][3] > 0) centers[j] = [sums[j][0]/sums[j][3], sums[j][1]/sums[j][3], sums[j][2]/sums[j][3]];
+      }
+    }
+    return { centers: centers.map(c => c.map(v => Math.round(v))), labels };
+  }
+
+  function findAnchors(samples) {
+    let blackCount = 0, whiteCount = 0;
+    for (const s of samples) {
+      if (s[0] < 35 && s[1] < 35 && s[2] < 35) blackCount++;
+      else if (s[0] > 230 && s[1] > 230 && s[2] > 230) whiteCount++;
+    }
+    const total = samples.length;
+    const anchors = [];
+    if (blackCount / total > 0.004) anchors.push([0, 0, 0]);
+    if (whiteCount / total > 0.004) anchors.push([255, 255, 255]);
+    return anchors;
+  }
+
+  /* SAFE snap: never invent a color that isn't really near the source.
+     Constraints:
+      - distance threshold: don't snap if no marker within ~80 RGB units
+      - saturation guard: low-saturation (neutral) colors can't snap to
+        high-saturation markers; they prefer grays/whites/blacks
+      - hue distance: if source has a hue, candidate hue must be similar */
+  function safeSnapToMarker(rgb, used) {
+    const [h, s, l] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
+    const isNeutral = s < 0.15;
+
+    let bestI = -1, bestScore = Infinity, bestMarker = null;
+    for (let i = 0; i < STANDARD_MARKERS.length; i++) {
+      const m = STANDARD_MARKERS[i];
+      const key = m.join(',');
+      if (used.has(key)) continue;
+      /* Saturation guard: neutral source must not snap to vivid marker */
+      const [mh, ms, ml] = rgbToHsl(m[0], m[1], m[2]);
+      if (isNeutral && ms > 0.25) continue;
+      /* Hue guard: chromatic source must have similar hue to its target */
+      if (!isNeutral && ms > 0.15) {
+        let hueDiff = Math.abs(h - mh);
+        if (hueDiff > 0.5) hueDiff = 1 - hueDiff;
+        if (hueDiff > 0.15) continue;  /* ~54 degrees max difference */
+      }
+      const dr = rgb[0]-m[0], dg = rgb[1]-m[1], db = rgb[2]-m[2];
+      const d = dr*dr + dg*dg + db*db;
+      if (d < bestScore) { bestScore = d; bestI = i; bestMarker = m; }
+    }
+    /* Distance threshold: ~80 units in RGB space squared = 6400 */
+    if (bestI >= 0 && bestScore < 6400) {
+      return bestMarker.slice();
+    }
+    /* No safe marker found — return original color (better than wrong) */
+    return rgb.slice();
+  }
+
+  function snapPaletteUnique(palette) {
+    const used = new Set();
+    const result = [];
+    const remap = new Array(palette.length);
+    for (let i = 0; i < palette.length; i++) {
+      const snapped = safeSnapToMarker(palette[i], used);
+      const key = snapped.join(',');
+      used.add(key);
+      remap[i] = result.length;
+      result.push(snapped);
+    }
+    return { palette: result, remap };
+  }
+
+  /* ---------- Cleanup: remove tiny same-color islands ---------- */
+  function cleanupGrid(grid, threshold) {
+    if (threshold < 1) return grid;
+    const gh = grid.length, gw = grid[0].length;
+    const visited = Array.from({length: gh}, () => new Array(gw).fill(false));
+    const out = grid.map(r => r.slice());
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        if (visited[y][x]) continue;
+        const color = grid[y][x];
+        const cells = [];
+        const queue = [[x, y]];
+        visited[y][x] = true;
+        while (queue.length) {
+          const [cx, cy] = queue.shift();
+          cells.push([cx, cy]);
+          const neighbors = [[cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]];
+          for (const [nx, ny] of neighbors) {
+            if (nx>=0 && nx<gw && ny>=0 && ny<gh && !visited[ny][nx] && grid[ny][nx]===color) {
+              visited[ny][nx] = true;
+              queue.push([nx, ny]);
+            }
+          }
+        }
+        if (cells.length <= threshold) {
+          const neighborColors = {};
+          for (const [cx, cy] of cells) {
+            const nbrs = [[cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]];
+            for (const [nx, ny] of nbrs) {
+              if (nx>=0 && nx<gw && ny>=0 && ny<gh && grid[ny][nx]!==color) {
+                const c = grid[ny][nx];
+                neighborColors[c] = (neighborColors[c] || 0) + 1;
+              }
+            }
+          }
+          let bestColor = color, bestCount = 0;
+          for (const c in neighborColors) {
+            if (neighborColors[c] > bestCount) { bestCount = neighborColors[c]; bestColor = parseInt(c); }
+          }
+          if (bestCount > 0) {
+            for (const [cx, cy] of cells) out[cy][cx] = bestColor;
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  /* ---------- Histogram check: drop palette colors that exist in <0.3%
+     of cells AND are vivid (likely artifacts); merge them into nearest
+     well-represented palette color. ---------- */
+  function dropArtifactColors(grid, palette) {
+    const gh = grid.length, gw = grid[0].length;
+    const total = gh * gw;
+    const counts = new Array(palette.length).fill(0);
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) counts[grid[y][x]]++;
+    }
+    const isArtifact = palette.map((c, i) => {
+      const pct = counts[i] / total;
+      const [, sat] = rgbToHsl(c[0], c[1], c[2]);
+      return pct < 0.003 && sat > 0.35;
+    });
+    if (!isArtifact.some(x => x)) return { grid, palette };
+    /* Build remap: each artifact -> nearest non-artifact palette index */
+    const remap = palette.map((c, i) => {
+      if (!isArtifact[i]) return i;
+      let bestI = i, bestD = Infinity;
+      for (let j = 0; j < palette.length; j++) {
+        if (isArtifact[j]) continue;
+        const d = (c[0]-palette[j][0])**2 + (c[1]-palette[j][1])**2 + (c[2]-palette[j][2])**2;
+        if (d < bestD) { bestD = d; bestI = j; }
+      }
+      return bestI;
+    });
+    /* Compact palette: build new palette without artifact colors */
+    const newIdx = new Array(palette.length);
+    const newPalette = [];
+    for (let i = 0; i < palette.length; i++) {
+      if (!isArtifact[i]) { newIdx[i] = newPalette.length; newPalette.push(palette[i]); }
+    }
+    for (let i = 0; i < palette.length; i++) {
+      if (isArtifact[i]) newIdx[i] = newIdx[remap[i]];
+    }
+    const newGrid = [];
+    for (let y = 0; y < gh; y++) {
+      const row = [];
+      for (let x = 0; x < gw; x++) row.push(newIdx[grid[y][x]]);
+      newGrid.push(row);
+    }
+    return { grid: newGrid, palette: newPalette };
+  }
+
+  /* ---------- Main pipeline ---------- */
+  function gridFromImage(img, gw, gh, k) {
+    const interW = gw * 3, interH = gh * 3;
+    const inter = document.createElement('canvas');
+    inter.width = interW; inter.height = interH;
+    const ictx = inter.getContext('2d');
+    ictx.imageSmoothingEnabled = true; ictx.imageSmoothingQuality = 'high';
+    const ar = img.width / img.height, tar = gw / gh;
+    let sx, sy, sw, sh;
+    if (ar > tar) { sh = img.height; sw = sh * tar; sx = (img.width - sw)/2; sy = 0; }
+    else { sw = img.width; sh = sw / tar; sx = 0; sy = (img.height - sh)/2; }
+    ictx.drawImage(img, sx, sy, sw, sh, 0, 0, interW, interH);
+    let id = ictx.getImageData(0, 0, interW, interH);
+    boostSaturation(id.data, 1.20);
+    sharpen(id.data, interW, interH, 0.6);
+    const blurred = boxBlur(id.data, interW, interH, 1);
+    const id2 = new ImageData(blurred, interW, interH);
+    ictx.putImageData(id2, 0, 0);
+    const c = document.createElement('canvas');
+    c.width = gw; c.height = gh;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(inter, 0, 0, gw, gh);
+    const data = ctx.getImageData(0, 0, gw, gh).data;
+    const samples = [];
+    for (let i = 0; i < data.length; i += 4) samples.push([data[i], data[i+1], data[i+2]]);
+    const anchors = findAnchors(samples);
+    const effectiveK = Math.max(k, anchors.length + 2);
+    const { centers, labels } = quantize(samples, effectiveK, anchors);
+    const snapped = snapPaletteUnique(centers);
+    let palette = snapped.palette;
+    let remap1 = snapped.remap;
+    const order = palette.map((c,i)=>({c,i,b:0.299*c[0]+0.587*c[1]+0.114*c[2]})).sort((a,b)=>a.b-b.b);
+    const finalRemap = new Array(palette.length);
+    order.forEach((o,n) => finalRemap[o.i] = n);
+    palette = order.map(o => o.c);
+    let grid = [];
+    for (let y = 0; y < gh; y++) {
+      const row = [];
+      for (let x = 0; x < gw; x++) {
+        const origLabel = labels[y*gw + x];
+        row.push(finalRemap[remap1[origLabel]]);
+      }
+      grid.push(row);
+    }
+    /* Drop tiny vivid palette colors that are almost certainly artifacts */
+    const dropped = dropArtifactColors(grid, palette);
+    grid = dropped.grid;
+    palette = dropped.palette;
+    /* Optional cleanup based on user setting */
+    const cleanupThreshold = parseInt($('cleanup').value) || 0;
+    if (cleanupThreshold > 0) grid = cleanupGrid(grid, cleanupThreshold);
+    return { grid, palette };
+  }
+
+  function makePaletteHSL(k) {
+    const cs = [];
+    for (let i = 0; i < k; i++) {
+      const h = (i / k);
+      const s = 0.65 + (i%2)*0.15;
+      const l = 0.45 + (i%3)*0.1;
+      cs.push(hslToRgb(h, s, l));
+    }
+    return cs.sort((a,b) => (0.299*a[0]+0.587*a[1]+0.114*a[2]) - (0.299*b[0]+0.587*b[1]+0.114*b[2]));
+  }
+  function gridManual(pat, gw, gh, k) {
+    const palette = makePaletteHSL(k);
+    const grid = [];
+    for (let y = 0; y < gh; y++) {
+      const row = [];
+      for (let x = 0; x < gw; x++) {
+        let v;
+        if (pat === 'random') v = Math.floor(Math.random() * k);
+        else if (pat === 'gradient') v = Math.floor((x / gw) * k) % k;
+        else if (pat === 'rings') {
+          const cx = gw/2, cy = gh/2;
+          const d = Math.sqrt((x-cx)*(x-cx) + (y-cy)*(y-cy));
+          v = Math.floor((d/Math.sqrt(cx*cx+cy*cy))*k) % k;
+        } else if (pat === 'stripes') v = Math.floor((x+y)/2) % k;
+        else if (pat === 'checker') v = (Math.floor(x/3) + Math.floor(y/3)) % k;
+        else v = 0;
+        row.push(v);
+      }
+      grid.push(row);
+    }
+    return { grid, palette };
+  }
+
+  /* ---------- Drawing (template + filled mode) ---------- */
+  function drawGrid(ctx, grid, palette, ox, oy, cell, shape, bg, fontPt, mode) {
+    const isFilled = mode === 'filled';
+    const stroke = bg === '#fff' ? '#000' : '#fff';
+    ctx.lineWidth = Math.max(0.5, cell * 0.04);
+    const gh = grid.length, gw = grid[0].length;
+    const yPitch = shape === 'hexagon' ? 0.86 : 1;
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        const v = grid[y][x];
+        let cx, cy;
+        if (shape === 'hexagon') {
+          const rowOffset = (y % 2) * cell * 0.5;
+          cx = ox + x*cell + cell/2 + rowOffset;
+          cy = oy + y*cell*yPitch + cell/2;
+        } else {
+          cx = ox + x*cell + cell/2;
+          cy = oy + y*cell + cell/2;
+        }
+        ctx.beginPath();
+        if (shape === 'circle') ctx.arc(cx, cy, cell*0.46, 0, Math.PI*2);
+        else if (shape === 'triangle') {
+          const up = (x + y) % 2 === 0;
+          const r = cell * 0.48;
+          if (up) { ctx.moveTo(cx, cy-r*0.7); ctx.lineTo(cx+r, cy+r*0.6); ctx.lineTo(cx-r, cy+r*0.6); }
+          else { ctx.moveTo(cx, cy+r*0.7); ctx.lineTo(cx+r, cy-r*0.6); ctx.lineTo(cx-r, cy-r*0.6); }
+          ctx.closePath();
+        } else if (shape === 'hexagon') {
+          const r = cell * 0.52;
+          for (let i = 0; i < 6; i++) {
+            const a = Math.PI/3 * i + Math.PI/6;
+            const px = cx + Math.cos(a)*r*0.95, py = cy + Math.sin(a)*r*0.95;
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+        }
+        if (isFilled) {
+          const c = palette[v];
+          const fillCol = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+          ctx.fillStyle = fillCol; ctx.fill();
+          ctx.strokeStyle = fillCol; ctx.stroke();
+        } else {
+          ctx.fillStyle = '#fff'; ctx.fill();
+          ctx.strokeStyle = stroke; ctx.stroke();
+          let ny = cy;
+          if (shape === 'triangle') {
+            const up = (x + y) % 2 === 0;
+            ny = cy + (up ? cell*0.10 : -cell*0.10);
+          }
+          ctx.font = '700 ' + (fontPt * 1.5) + 'px ui-monospace, "JetBrains Mono", monospace';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillStyle = '#000';
+          ctx.fillText(String(v + 1), cx, ny);
+        }
+      }
+    }
+  }
+
+  function renderResultBlock(result, idx) {
+    const { grid, palette, gw, gh, name } = result;
+    const block = document.createElement('div'); block.className = 'page-block';
+    const head = document.createElement('div'); head.className = 'page-head';
+    const left = document.createElement('span'); left.className = 'nm';
+    left.textContent = 'Page ' + (idx+1) + (name ? ' · ' + name : '');
+    head.appendChild(left);
+    const right = document.createElement('div'); right.className = 'toggle-row';
+    const meta = document.createElement('span'); meta.className = 'meta';
+    meta.textContent = gw + '×' + gh + ' · ' + palette.length + ' colors';
+    right.appendChild(meta);
+    const tplBtn = document.createElement('button'); tplBtn.className = 'toggle on'; tplBtn.textContent = 'Template';
+    const fillBtn = document.createElement('button'); fillBtn.className = 'toggle'; fillBtn.textContent = 'Filled';
+    right.appendChild(tplBtn); right.appendChild(fillBtn);
+    head.appendChild(right);
+    block.appendChild(head);
+    const stage = document.createElement('div'); stage.className = 'stage';
+    block.appendChild(stage);
+    const renderMode = (mode) => {
+      stage.innerHTML = '';
+      const cellPx = Math.max(7, Math.min(14, Math.floor(640 / gw)));
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const yPitch = state.shape === 'hexagon' ? 0.86 : 1;
+      const W = gw * cellPx + 20 + (state.shape === 'hexagon' ? cellPx/2 : 0);
+      const H = Math.ceil(gh * cellPx * yPitch) + 20;
+      const c = document.createElement('canvas');
+      c.width = W * dpr; c.height = H * dpr;
+      c.style.width = W + 'px'; c.style.height = H + 'px';
+      const ctx = c.getContext('2d');
+      ctx.scale(dpr, dpr);
+      const bg = $('bgMode').value === 'white' ? '#fff' : '#000';
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+      const fontPt = Math.max(4, Math.floor(cellPx * 0.50));
+      drawGrid(ctx, grid, palette, 10, 10, cellPx, state.shape, bg, fontPt, mode);
+      stage.appendChild(c);
+    };
+    tplBtn.onclick = () => { tplBtn.classList.add('on'); fillBtn.classList.remove('on'); renderMode('template'); };
+    fillBtn.onclick = () => { fillBtn.classList.add('on'); tplBtn.classList.remove('on'); renderMode('filled'); };
+    renderMode('template');
+    const leg = document.createElement('div'); leg.className = 'legend';
+    palette.forEach((c, i) => {
+      const sw = document.createElement('div');
+      sw.className = 'swatch';
+      sw.innerHTML = '<span class="chip" style="background:rgb('+c[0]+','+c[1]+','+c[2]+')"></span><span class="num">'+(i+1)+'</span>';
+      leg.appendChild(sw);
+    });
+    block.appendChild(leg);
+    return block;
+  }
+
+  function clampInt(v, lo, hi) { v = parseInt(v) || lo; return Math.max(lo, Math.min(hi, v)); }
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  $('generateBtn').onclick = async () => {
+    const gw = clampInt($('gridW').value, 10, 120);
+    const gh = clampInt($('gridH').value, 10, 160);
+    const k = clampInt($('numColors').value, 2, 36);
+    let count;
+    if (state.mode === 'image') {
+      if (state.images.length === 0) { setStatus('Upload at least one image first.', 'err'); return; }
+      count = state.images.length;
+    } else { count = 1; }
+    state.results = [];
+    $('pages').innerHTML = '';
+    $('dlOut').innerHTML = '';
+    $('pdfBtn').disabled = true;
+    $('pngBtn').disabled = true;
+    $('progress').style.display = '';
+    $('progressBar').style.width = '0%';
+    setStatus('Generating ' + count + ' page(s)...');
+    await sleep(20);
+    try {
+      for (let i = 0; i < count; i++) {
+        let res, name = '';
+        if (state.mode === 'image') {
+          const it = state.images[i];
+          name = it.name || ('image ' + (i+1));
+          res = gridFromImage(it.img, gw, gh, k);
+        } else {
+          res = gridManual($('manualPattern').value, gw, gh, k);
+        }
+        const result = { ...res, gw, gh, name };
+        state.results.push(result);
+        $('pages').appendChild(renderResultBlock(result, i));
+        $('progressBar').style.width = (((i+1)/count)*100) + '%';
+        await sleep(20);
+      }
+      $('pdfBtn').disabled = false;
+      $('pngBtn').disabled = false;
+      setStatus('Done. ' + count + ' page(s) ready. Tap "Filled" on any page to preview colors.', 'ok');
+      setTimeout(() => { $('progress').style.display = 'none'; }, 1200);
+    } catch (e) {
+      console.error(e); setStatus('Error: ' + e.message, 'err');
+      $('progress').style.display = 'none';
+    }
+  };
+
+  /* ---------- PDF export ---------- */
+  function polygonPdf(doc, pts, style) {
+    const segs = [];
+    for (let i = 1; i < pts.length; i++) segs.push([pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]]);
+    doc.lines(segs, pts[0][0], pts[0][1], [1,1], style || 'FD', true);
+  }
+  function drawCellPdf(doc, shape, x, y, cx, cy, cell, style) {
+    style = style || 'FD';
+    if (shape === 'circle') doc.circle(cx, cy, cell * 0.46, style);
+    else if (shape === 'triangle') {
+      const up = (x + y) % 2 === 0;
+      const r = cell * 0.48;
+      const pts = up ? [[cx, cy-r*0.7], [cx+r, cy+r*0.6], [cx-r, cy+r*0.6]]
+                     : [[cx, cy+r*0.7], [cx+r, cy-r*0.6], [cx-r, cy-r*0.6]];
+      polygonPdf(doc, pts, style);
+    } else if (shape === 'hexagon') {
+      const r = cell * 0.52;
+      const pts = [];
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI/3 * i + Math.PI/6;
+        pts.push([cx + Math.cos(a)*r*0.95, cy + Math.sin(a)*r*0.95]);
+      }
+      polygonPdf(doc, pts, style);
+    }
+  }
+  const PAGE_SIZES = {
+    'a4': [210, 297], 'a3': [297, 420],
+    '6x9': [152.4, 228.6], '7x10': [177.8, 254], '8.5x11': [215.9, 279.4]
+  };
+
+  function renderPagePdf(doc, result, isFirst) {
+    const { grid, palette } = result;
+    const gh = grid.length, gw = grid[0].length;
+    const [pw, ph] = PAGE_SIZES[$('pageSize').value];
+    const isWhite = $('bgMode').value === 'white';
+    if (!isFirst) doc.addPage([pw, ph], 'portrait');
+    doc.setFillColor(isWhite ? 255 : 0, isWhite ? 255 : 0, isWhite ? 255 : 0);
+    doc.rect(0, 0, pw, ph, 'F');
+    const margin = Math.min(10, pw * 0.05);
+    const legendH = 22;
+    const availW = pw - margin*2;
+    const availH = ph - margin*2 - legendH;
+    const yPitch = state.shape === 'hexagon' ? 0.86 : 1;
+    const cell = Math.min(availW / gw, availH / (gh * yPitch));
+    const totalGridW = gw*cell + (state.shape === 'hexagon' ? cell*0.5 : 0);
+    const totalGridH = gh*cell*yPitch;
+    const ox = margin + (availW - totalGridW) / 2;
+    const oy = margin + (availH - totalGridH) / 2;
+    const fontPt = Math.max(4, Math.min(18, cell * 2.835 * 0.62));
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(fontPt);
+    doc.setDrawColor(isWhite ? 80 : 200, isWhite ? 80 : 200, isWhite ? 80 : 200);
+    doc.setLineWidth(0.08);
+    doc.setFillColor(255, 255, 255);
+    doc.setTextColor(0, 0, 0);
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        let cx, cy;
+        if (state.shape === 'hexagon') {
+          const rowOffset = (y % 2) * cell * 0.5;
+          cx = ox + x*cell + cell/2 + rowOffset;
+          cy = oy + y*cell*yPitch + cell/2;
+        } else {
+          cx = ox + x*cell + cell/2;
+          cy = oy + y*cell + cell/2;
+        }
+        drawCellPdf(doc, state.shape, x, y, cx, cy, cell, 'FD');
+      }
+    }
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        const v = grid[y][x] + 1;
+        let cx, cy;
+        if (state.shape === 'hexagon') {
+          const rowOffset = (y % 2) * cell * 0.5;
+          cx = ox + x*cell + cell/2 + rowOffset;
+          cy = oy + y*cell*yPitch + cell/2;
+        } else {
+          cx = ox + x*cell + cell/2;
+          cy = oy + y*cell + cell/2;
+        }
+        let ny = cy;
+        if (state.shape === 'triangle') {
+          const up = (x + y) % 2 === 0;
+          ny = cy + (up ? cell*0.10 : -cell*0.10);
+        }
+        doc.text(String(v), cx, ny, { align: 'center', baseline: 'middle' });
+      }
+    }
+    const legY = ph - margin - legendH + 6;
+    doc.setTextColor(isWhite ? 0 : 255, isWhite ? 0 : 255, isWhite ? 0 : 255);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.text('Color key', margin, legY - 2);
+    const sw = 5, gap = 11;
+    const perRow = Math.max(1, Math.floor(availW / (sw + gap + 6)));
+    palette.forEach((c, i) => {
+      const col = i % perRow, row = Math.floor(i / perRow);
+      const lx = margin + col * (sw + gap + 6);
+      const ly = legY + row * (sw + 3);
+      doc.setFillColor(c[0], c[1], c[2]);
+      doc.setDrawColor(isWhite ? 0 : 255, isWhite ? 0 : 255, isWhite ? 0 : 255);
+      doc.setLineWidth(0.1);
+      doc.rect(lx, ly, sw, sw, 'FD');
+      doc.setTextColor(isWhite ? 0 : 255, isWhite ? 0 : 255, isWhite ? 0 : 255);
+      doc.text(String(i+1), lx + sw + 1.5, ly + sw - 1.2);
+    });
+  }
+
+  function showDownloadLink(href, fname, label) {
+    const out = $('dlOut');
+    const a = document.createElement('a');
+    a.className = 'dl-link';
+    a.href = href; a.download = fname; a.target = '_blank'; a.rel = 'noopener';
+    a.innerHTML = label + ' (' + fname + ')<span class="sub">Tap to open in a new tab — then save from there</span>';
+    out.appendChild(a);
+  }
+
+  $('pdfBtn').onclick = async () => {
+    if (state.results.length === 0) return;
+    if (!window.jspdf) { setStatus('PDF library still loading.', 'err'); return; }
+    const { jsPDF } = window.jspdf;
+    const [pw, ph] = PAGE_SIZES[$('pageSize').value];
+    const doc = new jsPDF({ unit: 'mm', format: [pw, ph], orientation: 'portrait', compress: true });
+    setStatus('Building PDF...');
+    await sleep(20);
+    state.results.forEach((r, i) => renderPagePdf(doc, r, i === 0));
+    const fname = state.results.length > 1
+      ? 'colorquest-' + state.results.length + 'pages-' + state.shape + '.pdf'
+      : 'colorquest-' + state.results[0].gw + 'x' + state.results[0].gh + '-' + state.shape + '.pdf';
+    const dataURL = doc.output('datauristring');
+    $('dlOut').innerHTML = '';
+    showDownloadLink(dataURL, fname, '📄 Open PDF');
+    setStatus('PDF ready. Tap the link below.', 'ok');
+  };
+
+  function renderPagePng(result) {
+    const { grid, palette } = result;
+    const gh = grid.length, gw = grid[0].length;
+    const CELL = 50;
+    const yPitch = state.shape === 'hexagon' ? 0.86 : 1;
+    const PAD = 40;
+    const LEGEND_H = 100;
+    const W = gw * CELL + PAD * 2 + (state.shape === 'hexagon' ? CELL/2 : 0);
+    const H = Math.ceil(gh * CELL * yPitch) + PAD * 2 + LEGEND_H;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    const isWhite = $('bgMode').value === 'white';
+    ctx.fillStyle = isWhite ? '#fff' : '#000';
+    ctx.fillRect(0, 0, W, H);
+    const fontPt = Math.floor(CELL * 0.42);
+    drawGrid(ctx, grid, palette, PAD, PAD, CELL, state.shape, isWhite ? '#fff' : '#000', fontPt, 'template');
+    const legY = H - LEGEND_H + 20;
+    ctx.fillStyle = isWhite ? '#000' : '#fff';
+    ctx.font = '600 18px ui-sans-serif, system-ui, sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText('Color key', PAD, legY);
+    const sw = 28, gap = 14, lblW = 30;
+    const perRow = Math.max(1, Math.floor((W - PAD*2) / (sw + gap + lblW)));
+    ctx.font = '600 14px ui-monospace, monospace';
+    palette.forEach((col, i) => {
+      const cidx = i % perRow, row = Math.floor(i / perRow);
+      const lx = PAD + cidx * (sw + gap + lblW);
+      const ly = legY + 28 + row * (sw + 8);
+      ctx.fillStyle = 'rgb(' + col[0] + ',' + col[1] + ',' + col[2] + ')';
+      ctx.fillRect(lx, ly, sw, sw);
+      ctx.strokeStyle = isWhite ? '#000' : '#fff';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(lx + 0.5, ly + 0.5, sw - 1, sw - 1);
+      ctx.fillStyle = isWhite ? '#000' : '#fff';
+      ctx.fillText(String(i+1), lx + sw + 6, ly + sw/2 - 7);
+    });
+    return c;
+  }
+
+  $('pngBtn').onclick = async () => {
+    if (state.results.length === 0) return;
+    setStatus('Building PNG' + (state.results.length > 1 ? 's...' : '...'));
+    await sleep(20);
+    $('dlOut').innerHTML = '';
+    state.results.forEach((r, i) => {
+      const c = renderPagePng(r);
+      const dataURL = c.toDataURL('image/png');
+      const fname = (state.results.length > 1)
+        ? 'colorquest-page' + (i+1) + '-' + r.gw + 'x' + r.gh + '-' + state.shape + '.png'
+        : 'colorquest-' + r.gw + 'x' + r.gh + '-' + state.shape + '.png';
+      const label = state.results.length > 1 ? '🖼 Open PNG (page ' + (i+1) + ')' : '🖼 Open PNG';
+      showDownloadLink(dataURL, fname, label);
+    });
+    setStatus(state.results.length + ' PNG' + (state.results.length>1?'s':'') + ' ready.', 'ok');
+  };
+})();
+</script>
+</body>
+</html>
