@@ -395,6 +395,26 @@
   }
   function clamp255(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
 
+  /* sRGB → CIE Lab (D65) — perceptually uniform color space */
+  function rgbToLab(r, g, b) {
+    const sr = r/255, sg = g/255, sb = b/255;
+    const lin = c => c <= 0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4);
+    const lr = lin(sr), lg = lin(sg), lb = lin(sb);
+    const x = (lr*0.4124564 + lg*0.3575761 + lb*0.1804375) / 0.95047;
+    const y = (lr*0.2126729 + lg*0.7151522 + lb*0.0721750) / 1.00000;
+    const z = (lr*0.0193339 + lg*0.1191920 + lb*0.9503041) / 1.08883;
+    const f = t => t > 0.008856 ? Math.cbrt(t) : (7.787*t + 16/116);
+    const fx = f(x), fy = f(y), fz = f(z);
+    return [116*fy - 16, 500*(fx-fy), 200*(fy-fz)];
+  }
+
+  /* Perceptual distance between two Lab colors (CIE76 Delta-E).
+     Roughly: 0–10 = imperceptible, 10–25 = noticeable, 25+ = clearly different. */
+  function deltaE(lab1, lab2) {
+    const dl = lab1[0]-lab2[0], da = lab1[1]-lab2[1], db = lab1[2]-lab2[2];
+    return Math.sqrt(dl*dl + da*da + db*db);
+  }
+
   function boostSaturation(data, boost) {
     for (let i = 0; i < data.length; i += 4) {
       const [h, s, l] = rgbToHsl(data[i], data[i+1], data[i+2]);
@@ -504,40 +524,92 @@
     return anchors;
   }
 
-  /* SAFE snap: never invent a color that isn't really near the source.
-     Constraints:
-      - distance threshold: don't snap if no marker within ~80 RGB units
-      - saturation guard: low-saturation (neutral) colors can't snap to
-        high-saturation markers; they prefer grays/whites/blacks
-      - hue distance: if source has a hue, candidate hue must be similar */
+  /* SAFE snap using Lab color space:
+     - Lab Delta-E threshold: don't snap if no marker within ~25 ΔE units
+     - saturation guard: low-saturation source can't snap to vivid marker
+     - hue guard: chromatic source must have similar hue */
   function safeSnapToMarker(rgb, used) {
     const [h, s, l] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
     const isNeutral = s < 0.15;
+    const sourceLab = rgbToLab(rgb[0], rgb[1], rgb[2]);
 
-    let bestI = -1, bestScore = Infinity, bestMarker = null;
+    let bestI = -1, bestDE = Infinity, bestMarker = null;
     for (let i = 0; i < STANDARD_MARKERS.length; i++) {
       const m = STANDARD_MARKERS[i];
       const key = m.join(',');
       if (used.has(key)) continue;
-      /* Saturation guard: neutral source must not snap to vivid marker */
-      const [mh, ms, ml] = rgbToHsl(m[0], m[1], m[2]);
+      const [mh, ms] = rgbToHsl(m[0], m[1], m[2]);
       if (isNeutral && ms > 0.25) continue;
-      /* Hue guard: chromatic source must have similar hue to its target */
       if (!isNeutral && ms > 0.15) {
         let hueDiff = Math.abs(h - mh);
         if (hueDiff > 0.5) hueDiff = 1 - hueDiff;
-        if (hueDiff > 0.15) continue;  /* ~54 degrees max difference */
+        if (hueDiff > 0.15) continue;
       }
-      const dr = rgb[0]-m[0], dg = rgb[1]-m[1], db = rgb[2]-m[2];
-      const d = dr*dr + dg*dg + db*db;
-      if (d < bestScore) { bestScore = d; bestI = i; bestMarker = m; }
+      const markerLab = rgbToLab(m[0], m[1], m[2]);
+      const de = deltaE(sourceLab, markerLab);
+      if (de < bestDE) { bestDE = de; bestI = i; bestMarker = m; }
     }
-    /* Distance threshold: ~80 units in RGB space squared = 6400 */
-    if (bestI >= 0 && bestScore < 6400) {
-      return bestMarker.slice();
-    }
-    /* No safe marker found — return original color (better than wrong) */
+    /* Lab ΔE threshold: stay below 25 (noticeable but related) */
+    if (bestI >= 0 && bestDE < 25) return bestMarker.slice();
     return rgb.slice();
+  }
+
+  /* Enforce minimum perceptual distance (Delta-E) between palette entries.
+     If two colors are too close (<MIN_DE), merge the smaller-cluster one
+     into the larger. This prevents the "4 oranges that look identical"
+     problem when generating with markers/pencils. */
+  function enforcePerceptualDistance(grid, palette, minDE) {
+    const gh = grid.length, gw = grid[0].length;
+    /* Count cells per palette color */
+    const counts = new Array(palette.length).fill(0);
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) counts[grid[y][x]]++;
+    }
+    /* Compute Lab for every palette color once */
+    const labs = palette.map(c => rgbToLab(c[0], c[1], c[2]));
+    /* Greedy merge: find the closest pair, merge smaller into larger,
+       repeat until no pair is closer than minDE. */
+    const alive = palette.map(() => true);
+    const remap = palette.map((_, i) => i);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      let bestPair = null, bestDE = minDE;
+      for (let i = 0; i < palette.length; i++) {
+        if (!alive[i]) continue;
+        for (let j = i+1; j < palette.length; j++) {
+          if (!alive[j]) continue;
+          const de = deltaE(labs[i], labs[j]);
+          if (de < bestDE) { bestDE = de; bestPair = [i, j]; }
+        }
+      }
+      if (bestPair) {
+        const [i, j] = bestPair;
+        /* Merge the one with fewer cells into the one with more */
+        const [keep, drop] = counts[i] >= counts[j] ? [i, j] : [j, i];
+        alive[drop] = false;
+        counts[keep] += counts[drop];
+        /* Update remap: anything pointing at drop now points at keep */
+        for (let k = 0; k < remap.length; k++) {
+          if (remap[k] === drop) remap[k] = keep;
+        }
+        changed = true;
+      }
+    }
+    /* Compact: build new palette from alive colors */
+    const newIdx = new Array(palette.length);
+    const newPalette = [];
+    for (let i = 0; i < palette.length; i++) {
+      if (alive[i]) { newIdx[i] = newPalette.length; newPalette.push(palette[i]); }
+    }
+    /* Rewrite grid through remap then through compaction */
+    const newGrid = [];
+    for (let y = 0; y < gh; y++) {
+      const row = [];
+      for (let x = 0; x < gw; x++) row.push(newIdx[remap[grid[y][x]]]);
+      newGrid.push(row);
+    }
+    return { grid: newGrid, palette: newPalette };
   }
 
   function snapPaletteUnique(palette) {
@@ -696,6 +768,11 @@
     const dropped = dropArtifactColors(grid, palette);
     grid = dropped.grid;
     palette = dropped.palette;
+    /* Merge palette colors that are perceptually too close (Lab ΔE < 18).
+       Keeps colors distinguishable when filled with real markers. */
+    const distanced = enforcePerceptualDistance(grid, palette, 18);
+    grid = distanced.grid;
+    palette = distanced.palette;
     /* Optional cleanup based on user setting */
     const cleanupThreshold = parseInt($('cleanup').value) || 0;
     if (cleanupThreshold > 0) grid = cleanupGrid(grid, cleanupThreshold);
