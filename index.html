@@ -235,6 +235,14 @@
           </div>
         </div>
         <div class="field">
+          <label>Palette style</label>
+          <select id="palStyle">
+            <option value="auto" selected>Auto — natural color matching</option>
+            <option value="hierarchical">Hierarchical — base colors + shades</option>
+          </select>
+          <div class="hint">Hierarchical works best for cartoons and flat illustrations. Auto is safer for photos and complex images.</div>
+        </div>
+        <div class="field">
           <label>Cleanup</label>
           <select id="cleanup">
             <option value="0" selected>Off — keep all details</option>
@@ -719,6 +727,106 @@
     return { grid: newGrid, palette: newPalette };
   }
 
+  /* Build a hierarchical palette: pick BASE colors (very different hues),
+     then derive shades/tints from each base. Total palette size ≈ k.
+     Approach:
+      1. Run K-means with small k (numBases) to find base colors
+      2. For each base, generate shades (darker) and tints (lighter)
+      3. Allocate slots proportional to how many pixels each base covers
+      4. Snap each generated shade/tint to nearest standard marker */
+  function hierarchicalPalette(samples, k, anchors) {
+    /* Decide how many BASE colors to extract (4-8 range) */
+    const numBases = k <= 8 ? 4 : k <= 14 ? 5 : k <= 20 ? 6 : 8;
+    const { centers: bases, labels: baseLabels } = quantize(samples, numBases, anchors);
+    /* Count how many samples each base claims */
+    const baseCounts = new Array(numBases).fill(0);
+    for (let i = 0; i < baseLabels.length; i++) baseCounts[baseLabels[i]]++;
+    /* Allocate remaining slots (k - numBases) proportional to coverage */
+    const remaining = Math.max(0, k - numBases);
+    const totalCount = baseLabels.length;
+    const allocations = baseCounts.map(c => Math.round((c / totalCount) * remaining));
+    /* Adjust allocations to exactly equal `remaining` */
+    let allocSum = allocations.reduce((a, b) => a + b, 0);
+    while (allocSum < remaining) {
+      const idx = baseCounts.indexOf(Math.max(...baseCounts.map((c, i) =>
+        c / (allocations[i] + 1))));
+      allocations[idx]++;
+      allocSum++;
+    }
+    while (allocSum > remaining) {
+      const idx = allocations.indexOf(Math.max(...allocations));
+      if (allocations[idx] > 0) { allocations[idx]--; allocSum--; }
+      else break;
+    }
+    /* Build the full palette: base + its shades/tints */
+    const fullPalette = [];
+    const baseToIndices = []; /* For each base, the indices in fullPalette */
+    for (let b = 0; b < numBases; b++) {
+      const baseRgb = bases[b];
+      const indices = [fullPalette.length];
+      fullPalette.push(baseRgb.slice());
+      const numShades = allocations[b];
+      if (numShades > 0) {
+        const [h, s, l] = rgbToHsl(baseRgb[0], baseRgb[1], baseRgb[2]);
+        /* Distribute shades: half darker, half lighter */
+        const numDarker = Math.floor(numShades / 2);
+        const numLighter = numShades - numDarker;
+        for (let d = 1; d <= numDarker; d++) {
+          const newL = Math.max(0.05, l - 0.15 * d);
+          fullPalette.push(hslToRgb(h, s, newL));
+          indices.push(fullPalette.length - 1);
+        }
+        for (let li = 1; li <= numLighter; li++) {
+          const newL = Math.min(0.95, l + 0.15 * li);
+          /* Reduce saturation a bit for lighter tints (more pastel) */
+          const newS = Math.max(0.1, s - 0.05 * li);
+          fullPalette.push(hslToRgb(h, newS, newL));
+          indices.push(fullPalette.length - 1);
+        }
+      }
+      baseToIndices.push(indices);
+    }
+    /* Snap every palette entry to standard markers, keeping unique results */
+    const used = new Set();
+    const snapped = [];
+    const snapRemap = new Array(fullPalette.length);
+    for (let i = 0; i < fullPalette.length; i++) {
+      const c = safeSnapToMarker(fullPalette[i], used);
+      const key = c.join(',');
+      if (used.has(key)) {
+        /* Already snapped to this; mark it and remap to the existing one */
+        let firstIdx = -1;
+        for (let j = 0; j < i; j++) {
+          if (snapped[snapRemap[j]] && snapped[snapRemap[j]].join(',') === key) {
+            firstIdx = snapRemap[j];
+            break;
+          }
+        }
+        if (firstIdx >= 0) { snapRemap[i] = firstIdx; continue; }
+      }
+      used.add(key);
+      snapRemap[i] = snapped.length;
+      snapped.push(c);
+    }
+    /* Now classify every sample: find which fullPalette index it should use */
+    const labels = new Int32Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      const s = samples[i];
+      const baseIdx = baseLabels[i];
+      const candidates = baseToIndices[baseIdx];
+      /* Pick the candidate (base + its shades) closest in Lab */
+      const sLab = rgbToLab(s[0], s[1], s[2]);
+      let bestI = candidates[0], bestDE = Infinity;
+      for (const ci of candidates) {
+        const cLab = rgbToLab(fullPalette[ci][0], fullPalette[ci][1], fullPalette[ci][2]);
+        const de = deltaE(sLab, cLab);
+        if (de < bestDE) { bestDE = de; bestI = ci; }
+      }
+      labels[i] = snapRemap[bestI];
+    }
+    return { centers: snapped, labels };
+  }
+
   /* ---------- Main pipeline ---------- */
   function gridFromImage(img, gw, gh, k) {
     const interW = gw * 3, interH = gh * 3;
@@ -747,10 +855,27 @@
     for (let i = 0; i < data.length; i += 4) samples.push([data[i], data[i+1], data[i+2]]);
     const anchors = findAnchors(samples);
     const effectiveK = Math.max(k, anchors.length + 2);
-    const { centers, labels } = quantize(samples, effectiveK, anchors);
-    const snapped = snapPaletteUnique(centers);
-    let palette = snapped.palette;
-    let remap1 = snapped.remap;
+    const palStyle = $('palStyle').value;
+    let centers, labels;
+    if (palStyle === 'hierarchical') {
+      const result = hierarchicalPalette(samples, effectiveK, anchors);
+      centers = result.centers;
+      labels = result.labels;
+    } else {
+      const result = quantize(samples, effectiveK, anchors);
+      centers = result.centers;
+      labels = result.labels;
+    }
+    /* Snap step: hierarchical already snapped, but we re-run for auto */
+    let palette, remap1;
+    if (palStyle === 'hierarchical') {
+      palette = centers;
+      remap1 = palette.map((_, i) => i);
+    } else {
+      const snapped = snapPaletteUnique(centers);
+      palette = snapped.palette;
+      remap1 = snapped.remap;
+    }
     const order = palette.map((c,i)=>({c,i,b:0.299*c[0]+0.587*c[1]+0.114*c[2]})).sort((a,b)=>a.b-b.b);
     const finalRemap = new Array(palette.length);
     order.forEach((o,n) => finalRemap[o.i] = n);
