@@ -63,7 +63,7 @@
   .hint { font-size: 11px; color: var(--ink-dim); margin-top: 4px; line-height: 1.4; font-family: 'JetBrains Mono', monospace; }
 
   .shape-pick, .diff-pick { display: grid; gap: 6px; }
-  .shape-pick { grid-template-columns: repeat(3, 1fr); }
+  .shape-pick { grid-template-columns: repeat(4, 1fr); }
   .diff-pick { grid-template-columns: repeat(2, 1fr); }
   .shape-pick button, .diff-pick button {
     background: #08080d; border: 1px solid var(--line); border-radius: 8px; padding: 10px 6px;
@@ -191,6 +191,7 @@
           <button class="on" data-shape="circle"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>Circle</button>
           <button data-shape="triangle"><svg viewBox="0 0 24 24"><path d="M12 3 L21 20 L3 20 Z"/></svg>Triangle</button>
           <button data-shape="hexagon"><svg viewBox="0 0 24 24"><path d="M12 2 L21 7 L21 17 L12 22 L3 17 L3 7 Z"/></svg>Hexagon</button>
+          <button data-shape="square"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16"/></svg>Square</button>
         </div>
       </div>
 
@@ -257,6 +258,7 @@
         <button class="btn-primary" id="generateBtn">Generate</button>
         <button class="btn-ghost" id="pdfBtn" disabled>Build PDF</button>
         <button class="btn-ghost" id="pngBtn" disabled>Build PNG</button>
+        <button class="btn-ghost" id="pngFilledBtn" disabled>Build PNG (Filled)</button>
       </div>
       <div class="progress" id="progress" style="display:none"><div class="progress-bar" id="progressBar"></div></div>
       <div class="status" id="status">Pick difficulty and one or more images, then press generate.</div>
@@ -330,21 +332,32 @@
     state.images = [];
     if (files.length === 0) { $('thumbs').style.display = 'none'; return; }
     setStatus('Loading ' + files.length + ' image(s)...');
+    const failures = [];
     for (const f of files) {
       try { const img = await loadImageFile(f); state.images.push({ img, name: f.name }); }
-      catch (err) { console.warn('skip', f.name, err); }
+      catch (err) { failures.push(f.name); console.warn('skip', f.name, err); }
     }
     renderThumbs();
-    setStatus(state.images.length + ' image(s) ready. Press generate.');
+    if (state.images.length === 0) {
+      setStatus('Could not load any images. Try PNG or JPG files (HEIC/RAW not supported).', 'err');
+    } else if (failures.length > 0) {
+      setStatus(state.images.length + ' loaded. ' + failures.length + ' skipped (try PNG or JPG).', 'ok');
+    } else {
+      setStatus(state.images.length + ' image(s) ready. Press generate.');
+    }
   };
 
   function loadImageFile(file) {
     return new Promise((res, rej) => {
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => { URL.revokeObjectURL(url); res(img); };
-      img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('load failed')); };
-      img.src = url;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => rej(new Error('image decode failed'));
+        img.src = e.target.result;
+      };
+      reader.onerror = () => rej(new Error('file read failed'));
+      reader.readAsDataURL(file);
     });
   }
 
@@ -959,10 +972,11 @@
         ctx.beginPath();
         if (shape === 'circle') ctx.arc(cx, cy, cell*0.46, 0, Math.PI*2);
         else if (shape === 'triangle') {
+          /* Tighter triangle packing: triangles share edges with neighbors */
           const up = (x + y) % 2 === 0;
-          const r = cell * 0.48;
-          if (up) { ctx.moveTo(cx, cy-r*0.7); ctx.lineTo(cx+r, cy+r*0.6); ctx.lineTo(cx-r, cy+r*0.6); }
-          else { ctx.moveTo(cx, cy+r*0.7); ctx.lineTo(cx+r, cy-r*0.6); ctx.lineTo(cx-r, cy-r*0.6); }
+          const r = cell * 0.62;
+          if (up) { ctx.moveTo(cx, cy-r*0.95); ctx.lineTo(cx+r, cy+r*0.55); ctx.lineTo(cx-r, cy+r*0.55); }
+          else { ctx.moveTo(cx, cy+r*0.95); ctx.lineTo(cx+r, cy-r*0.55); ctx.lineTo(cx-r, cy-r*0.55); }
           ctx.closePath();
         } else if (shape === 'hexagon') {
           const r = cell * 0.52;
@@ -972,6 +986,10 @@
             if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
           }
           ctx.closePath();
+        } else if (shape === 'square') {
+          /* Squares are tightly packed; keep a tiny gap for visual clarity */
+          const r = cell * 0.46;
+          ctx.rect(cx - r, cy - r, r*2, r*2);
         }
         if (isFilled) {
           const c = palette[v];
@@ -984,9 +1002,10 @@
           let ny = cy;
           if (shape === 'triangle') {
             const up = (x + y) % 2 === 0;
-            ny = cy + (up ? cell*0.10 : -cell*0.10);
+            ny = cy + (up ? cell*0.05 : -cell*0.05);
           }
-          ctx.font = '700 ' + (fontPt * 1.5) + 'px ui-monospace, "JetBrains Mono", monospace';
+          /* Lighter font weight (400) — readable but softer */
+          ctx.font = '400 ' + (fontPt * 1.35) + 'px ui-monospace, "JetBrains Mono", monospace';
           ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
           ctx.fillStyle = '#000';
           ctx.fillText(String(v + 1), cx, ny);
@@ -1062,6 +1081,7 @@
     $('dlOut').innerHTML = '';
     $('pdfBtn').disabled = true;
     $('pngBtn').disabled = true;
+    $('pngFilledBtn').disabled = true;
     $('progress').style.display = '';
     $('progressBar').style.width = '0%';
     setStatus('Generating ' + count + ' page(s)...');
@@ -1084,6 +1104,7 @@
       }
       $('pdfBtn').disabled = false;
       $('pngBtn').disabled = false;
+      $('pngFilledBtn').disabled = false;
       setStatus('Done. ' + count + ' page(s) ready. Tap "Filled" on any page to preview colors.', 'ok');
       setTimeout(() => { $('progress').style.display = 'none'; }, 1200);
     } catch (e) {
@@ -1103,9 +1124,9 @@
     if (shape === 'circle') doc.circle(cx, cy, cell * 0.46, style);
     else if (shape === 'triangle') {
       const up = (x + y) % 2 === 0;
-      const r = cell * 0.48;
-      const pts = up ? [[cx, cy-r*0.7], [cx+r, cy+r*0.6], [cx-r, cy+r*0.6]]
-                     : [[cx, cy+r*0.7], [cx+r, cy-r*0.6], [cx-r, cy-r*0.6]];
+      const r = cell * 0.62;
+      const pts = up ? [[cx, cy-r*0.95], [cx+r, cy+r*0.55], [cx-r, cy+r*0.55]]
+                     : [[cx, cy+r*0.95], [cx+r, cy-r*0.55], [cx-r, cy-r*0.55]];
       polygonPdf(doc, pts, style);
     } else if (shape === 'hexagon') {
       const r = cell * 0.52;
@@ -1115,6 +1136,9 @@
         pts.push([cx + Math.cos(a)*r*0.95, cy + Math.sin(a)*r*0.95]);
       }
       polygonPdf(doc, pts, style);
+    } else if (shape === 'square') {
+      const r = cell * 0.46;
+      doc.rect(cx - r, cy - r, r*2, r*2, style);
     }
   }
   const PAGE_SIZES = {
@@ -1140,8 +1164,8 @@
     const totalGridH = gh*cell*yPitch;
     const ox = margin + (availW - totalGridW) / 2;
     const oy = margin + (availH - totalGridH) / 2;
-    const fontPt = Math.max(4, Math.min(18, cell * 2.835 * 0.62));
-    doc.setFont('helvetica', 'bold');
+    const fontPt = Math.max(4, Math.min(18, cell * 2.835 * 0.55));
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(fontPt);
     doc.setDrawColor(isWhite ? 80 : 200, isWhite ? 80 : 200, isWhite ? 80 : 200);
     doc.setLineWidth(0.08);
@@ -1176,7 +1200,7 @@
         let ny = cy;
         if (state.shape === 'triangle') {
           const up = (x + y) % 2 === 0;
-          ny = cy + (up ? cell*0.10 : -cell*0.10);
+          ny = cy + (up ? cell*0.05 : -cell*0.05);
         }
         doc.text(String(v), cx, ny, { align: 'center', baseline: 'middle' });
       }
@@ -1228,7 +1252,8 @@
     setStatus('PDF ready. Tap the link below.', 'ok');
   };
 
-  function renderPagePng(result) {
+  function renderPagePng(result, mode) {
+    mode = mode || 'template';
     const { grid, palette } = result;
     const gh = grid.length, gw = grid[0].length;
     const CELL = 50;
@@ -1244,7 +1269,7 @@
     ctx.fillStyle = isWhite ? '#fff' : '#000';
     ctx.fillRect(0, 0, W, H);
     const fontPt = Math.floor(CELL * 0.42);
-    drawGrid(ctx, grid, palette, PAD, PAD, CELL, state.shape, isWhite ? '#fff' : '#000', fontPt, 'template');
+    drawGrid(ctx, grid, palette, PAD, PAD, CELL, state.shape, isWhite ? '#fff' : '#000', fontPt, mode);
     const legY = H - LEGEND_H + 20;
     ctx.fillStyle = isWhite ? '#000' : '#fff';
     ctx.font = '600 18px ui-sans-serif, system-ui, sans-serif';
@@ -1274,7 +1299,7 @@
     await sleep(20);
     $('dlOut').innerHTML = '';
     state.results.forEach((r, i) => {
-      const c = renderPagePng(r);
+      const c = renderPagePng(r, 'template');
       const dataURL = c.toDataURL('image/png');
       const fname = (state.results.length > 1)
         ? 'colorquest-page' + (i+1) + '-' + r.gw + 'x' + r.gh + '-' + state.shape + '.png'
@@ -1283,6 +1308,23 @@
       showDownloadLink(dataURL, fname, label);
     });
     setStatus(state.results.length + ' PNG' + (state.results.length>1?'s':'') + ' ready.', 'ok');
+  };
+
+  $('pngFilledBtn').onclick = async () => {
+    if (state.results.length === 0) return;
+    setStatus('Building filled PNG' + (state.results.length > 1 ? 's...' : '...'));
+    await sleep(20);
+    $('dlOut').innerHTML = '';
+    state.results.forEach((r, i) => {
+      const c = renderPagePng(r, 'filled');
+      const dataURL = c.toDataURL('image/png');
+      const fname = (state.results.length > 1)
+        ? 'colorquest-page' + (i+1) + '-' + r.gw + 'x' + r.gh + '-' + state.shape + '-filled.png'
+        : 'colorquest-' + r.gw + 'x' + r.gh + '-' + state.shape + '-filled.png';
+      const label = state.results.length > 1 ? '🎨 Open filled PNG (page ' + (i+1) + ')' : '🎨 Open filled PNG';
+      showDownloadLink(dataURL, fname, label);
+    });
+    setStatus(state.results.length + ' filled PNG' + (state.results.length>1?'s':'') + ' ready.', 'ok');
   };
 })();
 </script>
