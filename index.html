@@ -240,8 +240,9 @@
           <select id="palStyle">
             <option value="auto" selected>Auto — natural color matching</option>
             <option value="hierarchical">Hierarchical — base colors + shades</option>
+            <option value="kdp22">KDP Standard 22 — fixed colors with names (B&amp;W book ready)</option>
           </select>
-          <div class="hint">Hierarchical works best for cartoons and flat illustrations. Auto is safer for photos and complex images.</div>
+          <div class="hint">KDP Standard uses 22 named colors with fixed numbers (Black=1, Gray=2, ... Magenta=22). Designed for black-and-white book printing on Amazon KDP.</div>
         </div>
         <div class="field">
           <label>Cleanup</label>
@@ -286,6 +287,37 @@
 (function(){
   const $ = id => document.getElementById(id);
   const state = { shape: 'circle', mode: 'image', images: [], results: [], diff: 'medium' };
+
+  /* Fixed 22-color palette for KDP black-and-white book printing.
+     Numbers are stable across all generated pages: Black=1, Gray=2, ... Magenta=22.
+     This matches the Sunlife Drawing book convention so users can set up their
+     marker layout once and use it for the entire book. */
+  const KDP_22 = [
+    { name: 'Black',        rgb: [0, 0, 0] },
+    { name: 'Gray',         rgb: [128, 128, 128] },
+    { name: 'Dark Brown',   rgb: [80, 45, 25] },
+    { name: 'Brown',        rgb: [140, 85, 45] },
+    { name: 'Tan',          rgb: [210, 170, 120] },
+    { name: 'Peach',        rgb: [255, 200, 165] },
+    { name: 'Red',          rgb: [220, 35, 35] },
+    { name: 'Red Orange',   rgb: [235, 90, 50] },
+    { name: 'Orange',       rgb: [255, 130, 30] },
+    { name: 'Yellow Orange',rgb: [255, 180, 50] },
+    { name: 'Yellow',       rgb: [255, 225, 60] },
+    { name: 'Yellow Green', rgb: [180, 215, 70] },
+    { name: 'Green',        rgb: [80, 180, 70] },
+    { name: 'Dark Green',   rgb: [30, 110, 50] },
+    { name: 'Aqua Green',   rgb: [80, 200, 180] },
+    { name: 'Light Blue',   rgb: [110, 200, 235] },
+    { name: 'Blue',         rgb: [50, 130, 220] },
+    { name: 'Dark Blue',    rgb: [25, 60, 165] },
+    { name: 'Pink',         rgb: [240, 150, 195] },
+    { name: 'Violet',       rgb: [165, 110, 215] },
+    { name: 'Dark Violet',  rgb: [105, 55, 155] },
+    { name: 'Magenta',      rgb: [200, 50, 150] },
+  ];
+  /* Pre-compute Lab values for fast snap during generation */
+  const KDP_22_LAB = KDP_22.map(c => null); /* lazy-filled on first use */
 
   /* Common marker colors (~36 entries from typical Touch/Stabilo/Crayola sets) */
   const STANDARD_MARKERS = [
@@ -740,6 +772,35 @@
     return { grid: newGrid, palette: newPalette };
   }
 
+  /* KDP Standard 22-color palette mode:
+     Every pixel snaps directly to the nearest of the 22 fixed colors via
+     Lab Delta-E. Color numbers are stable across all images: Black=1, Gray=2,
+     ... Magenta=22. The output palette only includes colors actually used,
+     but their numbers remain their original (Black always shows as "1"). */
+  function kdpStandardPalette(samples) {
+    /* Lazy-compute Lab values for the 22 reference colors */
+    for (let i = 0; i < KDP_22.length; i++) {
+      if (!KDP_22_LAB[i]) {
+        const c = KDP_22[i].rgb;
+        KDP_22_LAB[i] = rgbToLab(c[0], c[1], c[2]);
+      }
+    }
+    const labels = new Int32Array(samples.length);
+    /* Each sample → nearest of the 22 colors */
+    for (let i = 0; i < samples.length; i++) {
+      const s = samples[i];
+      const sLab = rgbToLab(s[0], s[1], s[2]);
+      let bestI = 0, bestDE = Infinity;
+      for (let j = 0; j < KDP_22.length; j++) {
+        const de = deltaE(sLab, KDP_22_LAB[j]);
+        if (de < bestDE) { bestDE = de; bestI = j; }
+      }
+      labels[i] = bestI;
+    }
+    /* Return all 22 colors as centers; unused ones will be removed later. */
+    return { centers: KDP_22.map(c => c.rgb.slice()), labels };
+  }
+
   /* Build a hierarchical palette: pick BASE colors (very different hues),
      then derive shades/tints from each base. Total palette size ≈ k.
      Approach:
@@ -869,6 +930,67 @@
     const anchors = findAnchors(samples);
     const effectiveK = Math.max(k, anchors.length + 2);
     const palStyle = $('palStyle').value;
+
+    /* KDP mode is fundamentally different: fixed 22-color palette with
+       stable numbers. Skip K-means, snap, perceptual distance — all the
+       "natural color matching" logic that would re-number colors. */
+    if (palStyle === 'kdp22') {
+      const { centers, labels } = kdpStandardPalette(samples);
+      /* Build grid using KDP palette indices (0-21) directly */
+      let grid = [];
+      for (let y = 0; y < gh; y++) {
+        const row = [];
+        for (let x = 0; x < gw; x++) row.push(labels[y*gw + x]);
+        grid.push(row);
+      }
+      /* Optional cleanup */
+      const cleanupThreshold = parseInt($('cleanup').value) || 0;
+      if (cleanupThreshold > 0) grid = cleanupGrid(grid, cleanupThreshold);
+      /* Find which of the 22 colors are actually used in this image */
+      const used = new Set();
+      for (let y = 0; y < gh; y++) {
+        for (let x = 0; x < gw; x++) used.add(grid[y][x]);
+      }
+      /* Drop tiny color usage (< 0.3% of cells) — likely JPEG artifacts.
+         Reassign those cells to their most common neighbor among USED colors. */
+      const totalCells = gh * gw;
+      const counts = new Array(KDP_22.length).fill(0);
+      for (let y = 0; y < gh; y++) {
+        for (let x = 0; x < gw; x++) counts[grid[y][x]]++;
+      }
+      const tooRare = new Set();
+      for (const idx of used) {
+        if (counts[idx] / totalCells < 0.003) tooRare.add(idx);
+      }
+      if (tooRare.size > 0) {
+        for (let y = 0; y < gh; y++) {
+          for (let x = 0; x < gw; x++) {
+            if (!tooRare.has(grid[y][x])) continue;
+            /* Replace with closest non-rare KDP color */
+            const sLab = KDP_22_LAB[grid[y][x]];
+            let bestI = grid[y][x], bestDE = Infinity;
+            for (let j = 0; j < KDP_22.length; j++) {
+              if (tooRare.has(j)) continue;
+              const de = deltaE(sLab, KDP_22_LAB[j]);
+              if (de < bestDE) { bestDE = de; bestI = j; }
+            }
+            grid[y][x] = bestI;
+          }
+        }
+        /* Recompute used set */
+        used.clear();
+        for (let y = 0; y < gh; y++) {
+          for (let x = 0; x < gw; x++) used.add(grid[y][x]);
+        }
+      }
+      /* Build the palette as full KDP_22 — but the legend will only show
+         used colors. We keep KDP indices stable (don't compact). */
+      const palette = KDP_22.map(c => c.rgb.slice());
+      const paletteNames = KDP_22.map(c => c.name);
+      const usedSet = used;
+      return { grid, palette, paletteNames, usedSet, kdpMode: true };
+    }
+
     let centers, labels;
     if (palStyle === 'hierarchical') {
       const result = hierarchicalPalette(samples, effectiveK, anchors);
@@ -1015,7 +1137,7 @@
   }
 
   function renderResultBlock(result, idx) {
-    const { grid, palette, gw, gh, name } = result;
+    const { grid, palette, gw, gh, name, paletteNames, usedSet, kdpMode } = result;
     const block = document.createElement('div'); block.className = 'page-block';
     const head = document.createElement('div'); head.className = 'page-head';
     const left = document.createElement('span'); left.className = 'nm';
@@ -1023,7 +1145,8 @@
     head.appendChild(left);
     const right = document.createElement('div'); right.className = 'toggle-row';
     const meta = document.createElement('span'); meta.className = 'meta';
-    meta.textContent = gw + '×' + gh + ' · ' + palette.length + ' colors';
+    const colorCount = kdpMode ? usedSet.size : palette.length;
+    meta.textContent = gw + '×' + gh + ' · ' + colorCount + ' colors' + (kdpMode ? ' · KDP 22' : '');
     right.appendChild(meta);
     const tplBtn = document.createElement('button'); tplBtn.className = 'toggle on'; tplBtn.textContent = 'Template';
     const fillBtn = document.createElement('button'); fillBtn.className = 'toggle'; fillBtn.textContent = 'Filled';
@@ -1054,12 +1177,25 @@
     fillBtn.onclick = () => { fillBtn.classList.add('on'); tplBtn.classList.remove('on'); renderMode('filled'); };
     renderMode('template');
     const leg = document.createElement('div'); leg.className = 'legend';
-    palette.forEach((c, i) => {
-      const sw = document.createElement('div');
-      sw.className = 'swatch';
-      sw.innerHTML = '<span class="chip" style="background:rgb('+c[0]+','+c[1]+','+c[2]+')"></span><span class="num">'+(i+1)+'</span>';
-      leg.appendChild(sw);
-    });
+    if (kdpMode) {
+      /* KDP mode: show only used colors, with names + stable numbers (1-22) */
+      const sortedUsed = Array.from(usedSet).sort((a, b) => a - b);
+      sortedUsed.forEach(i => {
+        const c = palette[i];
+        const nm = paletteNames[i];
+        const sw = document.createElement('div');
+        sw.className = 'swatch';
+        sw.innerHTML = '<span class="chip" style="background:rgb('+c[0]+','+c[1]+','+c[2]+')"></span><span class="num">'+(i+1)+'</span><span style="margin-left:4px">'+nm+'</span>';
+        leg.appendChild(sw);
+      });
+    } else {
+      palette.forEach((c, i) => {
+        const sw = document.createElement('div');
+        sw.className = 'swatch';
+        sw.innerHTML = '<span class="chip" style="background:rgb('+c[0]+','+c[1]+','+c[2]+')"></span><span class="num">'+(i+1)+'</span>';
+        leg.appendChild(sw);
+      });
+    }
     block.appendChild(leg);
     return block;
   }
@@ -1211,18 +1347,41 @@
     doc.setFontSize(7);
     doc.text('Color key', margin, legY - 2);
     const sw = 5, gap = 11;
-    const perRow = Math.max(1, Math.floor(availW / (sw + gap + 6)));
-    palette.forEach((c, i) => {
-      const col = i % perRow, row = Math.floor(i / perRow);
-      const lx = margin + col * (sw + gap + 6);
-      const ly = legY + row * (sw + 3);
-      doc.setFillColor(c[0], c[1], c[2]);
-      doc.setDrawColor(isWhite ? 0 : 255, isWhite ? 0 : 255, isWhite ? 0 : 255);
-      doc.setLineWidth(0.1);
-      doc.rect(lx, ly, sw, sw, 'FD');
-      doc.setTextColor(isWhite ? 0 : 255, isWhite ? 0 : 255, isWhite ? 0 : 255);
-      doc.text(String(i+1), lx + sw + 1.5, ly + sw - 1.2);
-    });
+
+    if (result.kdpMode) {
+      /* B&W-friendly legend: number in white circle outline + color name as text.
+         No filled chips, since the book interior is printed black-and-white. */
+      const sortedUsed = Array.from(result.usedSet).sort((a, b) => a - b);
+      const perRowKdp = Math.max(1, Math.floor(availW / 32));  /* ~32mm per entry */
+      sortedUsed.forEach((idx, listPos) => {
+        const col = listPos % perRowKdp, row = Math.floor(listPos / perRowKdp);
+        const lx = margin + col * 32;
+        const ly = legY + row * 5;
+        /* Number circle (matches book convention) */
+        doc.setDrawColor(isWhite ? 0 : 255, isWhite ? 0 : 255, isWhite ? 0 : 255);
+        doc.setLineWidth(0.15);
+        doc.circle(lx + 1.5, ly + 1.5, 1.5, 'D');
+        doc.setTextColor(isWhite ? 0 : 255, isWhite ? 0 : 255, isWhite ? 0 : 255);
+        doc.setFontSize(5);
+        doc.text(String(idx + 1), lx + 1.5, ly + 2.2, { align: 'center' });
+        /* Color name text */
+        doc.setFontSize(6.5);
+        doc.text(result.paletteNames[idx], lx + 4, ly + 2.5);
+      });
+    } else {
+      const perRow = Math.max(1, Math.floor(availW / (sw + gap + 6)));
+      palette.forEach((c, i) => {
+        const col = i % perRow, row = Math.floor(i / perRow);
+        const lx = margin + col * (sw + gap + 6);
+        const ly = legY + row * (sw + 3);
+        doc.setFillColor(c[0], c[1], c[2]);
+        doc.setDrawColor(isWhite ? 0 : 255, isWhite ? 0 : 255, isWhite ? 0 : 255);
+        doc.setLineWidth(0.1);
+        doc.rect(lx, ly, sw, sw, 'FD');
+        doc.setTextColor(isWhite ? 0 : 255, isWhite ? 0 : 255, isWhite ? 0 : 255);
+        doc.text(String(i+1), lx + sw + 1.5, ly + sw - 1.2);
+      });
+    }
   }
 
   function showDownloadLink(href, fname, label) {
@@ -1275,21 +1434,49 @@
     ctx.font = '600 18px ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
     ctx.fillText('Color key', PAD, legY);
-    const sw = 28, gap = 14, lblW = 30;
-    const perRow = Math.max(1, Math.floor((W - PAD*2) / (sw + gap + lblW)));
-    ctx.font = '600 14px ui-monospace, monospace';
-    palette.forEach((col, i) => {
-      const cidx = i % perRow, row = Math.floor(i / perRow);
-      const lx = PAD + cidx * (sw + gap + lblW);
-      const ly = legY + 28 + row * (sw + 8);
-      ctx.fillStyle = 'rgb(' + col[0] + ',' + col[1] + ',' + col[2] + ')';
-      ctx.fillRect(lx, ly, sw, sw);
-      ctx.strokeStyle = isWhite ? '#000' : '#fff';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(lx + 0.5, ly + 0.5, sw - 1, sw - 1);
-      ctx.fillStyle = isWhite ? '#000' : '#fff';
-      ctx.fillText(String(i+1), lx + sw + 6, ly + sw/2 - 7);
-    });
+    if (result.kdpMode) {
+      /* B&W-style: number circle + name text, only used colors */
+      const sortedUsed = Array.from(result.usedSet).sort((a, b) => a - b);
+      const entryW = 180;
+      const perRowKdp = Math.max(1, Math.floor((W - PAD*2) / entryW));
+      ctx.font = '600 13px ui-sans-serif, system-ui, sans-serif';
+      sortedUsed.forEach((idx, listPos) => {
+        const cidx = listPos % perRowKdp, row = Math.floor(listPos / perRowKdp);
+        const lx = PAD + cidx * entryW;
+        const ly = legY + 32 + row * 26;
+        /* Number circle */
+        ctx.strokeStyle = isWhite ? '#000' : '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(lx + 10, ly + 10, 9, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = isWhite ? '#000' : '#fff';
+        ctx.font = '600 11px ui-monospace, monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(String(idx + 1), lx + 10, ly + 11);
+        /* Color name */
+        ctx.font = '500 13px ui-sans-serif, system-ui, sans-serif';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillText(result.paletteNames[idx], lx + 26, ly + 11);
+      });
+    } else {
+      const sw = 28, gap = 14, lblW = 30;
+      const perRow = Math.max(1, Math.floor((W - PAD*2) / (sw + gap + lblW)));
+      ctx.font = '600 14px ui-monospace, monospace';
+      palette.forEach((col, i) => {
+        const cidx = i % perRow, row = Math.floor(i / perRow);
+        const lx = PAD + cidx * (sw + gap + lblW);
+        const ly = legY + 28 + row * (sw + 8);
+        ctx.fillStyle = 'rgb(' + col[0] + ',' + col[1] + ',' + col[2] + ')';
+        ctx.fillRect(lx, ly, sw, sw);
+        ctx.strokeStyle = isWhite ? '#000' : '#fff';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(lx + 0.5, ly + 0.5, sw - 1, sw - 1);
+        ctx.fillStyle = isWhite ? '#000' : '#fff';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        ctx.fillText(String(i+1), lx + sw + 6, ly + sw/2 - 7);
+      });
+    }
     return c;
   }
 
