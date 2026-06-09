@@ -178,10 +178,10 @@
       <div class="field">
         <label>Difficulty</label>
         <div class="diff-pick" id="diffPick">
-          <button data-diff="easy" data-w="30" data-h="40" data-k="8"><span class="lbl">Easy</span><span class="det">30×40 · 8 colors</span></button>
-          <button class="on" data-diff="medium" data-w="45" data-h="60" data-k="14"><span class="lbl">Medium</span><span class="det">45×60 · 14 colors</span></button>
-          <button data-diff="hard" data-w="60" data-h="80" data-k="20"><span class="lbl">Hard</span><span class="det">60×80 · 20 colors</span></button>
-          <button data-diff="custom"><span class="lbl">Custom</span><span class="det">your numbers</span></button>
+          <button class="on" data-diff="standard" data-w="35" data-h="50" data-k="13"><span class="lbl">Standard</span><span class="det">35×50 · 13 colors</span></button>
+          <button data-diff="easy" data-w="35" data-h="50" data-k="8"><span class="lbl">Easy</span><span class="det">35×50 · 8 colors</span></button>
+          <button data-diff="hard" data-w="35" data-h="50" data-k="18"><span class="lbl">Hard</span><span class="det">35×50 · 18 colors</span></button>
+          <button data-diff="custom"><span class="lbl">Custom</span><span class="det">advanced</span></button>
         </div>
       </div>
 
@@ -240,9 +240,10 @@
           <select id="palStyle">
             <option value="auto" selected>Auto — natural color matching</option>
             <option value="hierarchical">Hierarchical — base colors + shades</option>
-            <option value="kdp22">KDP Standard 22 — fixed colors with names (B&amp;W book ready)</option>
+            <option value="kdp22">ColorQuest 23 fixed (new — dominant-color sampling, cleaner output)</option>
+            <option value="kdp22_legacy">KDP Standard 22 fixed (legacy — browser downsample)</option>
           </select>
-          <div class="hint">KDP Standard uses 22 named colors with fixed numbers (Black=1, Gray=2, ... Magenta=22). Designed for black-and-white book printing on Amazon KDP.</div>
+          <div class="hint">Both options use the same 23-color palette. "ColorQuest 23 fixed" is the new pipeline with 5×5 dominant-color sampling per cell — preserves small features and produces cleaner backgrounds. "KDP Standard 22 fixed" is the legacy pipeline kept for comparison.</div>
         </div>
         <div class="field">
           <label>Cleanup</label>
@@ -291,7 +292,7 @@
   /* Fixed 23-color palette for KDP black-and-white book printing.
      Numbering uses single-character labels: 0-9 then A-M (Sunlife system).
      This keeps cells readable even at small sizes (single char vs. "22"). */
-  const KDP_22 = [
+  const COLORQUEST_PALETTE = [
     { name: 'Black',        label: '0', rgb: [0, 0, 0] },
     { name: 'Gray',         label: '1', rgb: [160, 160, 160] },
     { name: 'Dark Gray',    label: '2', rgb: [90, 90, 90] },
@@ -318,7 +319,7 @@
     { name: 'White',        label: '',  rgb: [255, 255, 255] },
   ];
   /* Pre-compute Lab values for fast snap during generation */
-  const KDP_22_LAB = KDP_22.map(c => null); /* lazy-filled on first use */
+  const COLORQUEST_PALETTE_LAB = COLORQUEST_PALETTE.map(c => null); /* lazy-filled on first use */
 
   /* Common marker colors (~36 entries from typical Touch/Stabilo/Crayola sets) */
   const STANDARD_MARKERS = [
@@ -780,10 +781,10 @@
      but their numbers remain their original (Black always shows as "1"). */
   function kdpStandardPalette(samples) {
     /* Lazy-compute Lab values for the 23 reference colors */
-    for (let i = 0; i < KDP_22.length; i++) {
-      if (!KDP_22_LAB[i]) {
-        const c = KDP_22[i].rgb;
-        KDP_22_LAB[i] = rgbToLab(c[0], c[1], c[2]);
+    for (let i = 0; i < COLORQUEST_PALETTE.length; i++) {
+      if (!COLORQUEST_PALETTE_LAB[i]) {
+        const c = COLORQUEST_PALETTE[i].rgb;
+        COLORQUEST_PALETTE_LAB[i] = rgbToLab(c[0], c[1], c[2]);
       }
     }
     const labels = new Int32Array(samples.length);
@@ -792,13 +793,13 @@
       const s = samples[i];
       const sLab = rgbToLab(s[0], s[1], s[2]);
       let bestI = 0, bestDE = Infinity;
-      for (let j = 0; j < KDP_22.length; j++) {
-        const de = deltaE(sLab, KDP_22_LAB[j]);
+      for (let j = 0; j < COLORQUEST_PALETTE.length; j++) {
+        const de = deltaE(sLab, COLORQUEST_PALETTE_LAB[j]);
         if (de < bestDE) { bestDE = de; bestI = j; }
       }
       labels[i] = bestI;
     }
-    return { centers: KDP_22.map(c => c.rgb.slice()), labels };
+    return { centers: COLORQUEST_PALETTE.map(c => c.rgb.slice()), labels };
   }
 
   /* Build a hierarchical palette: pick BASE colors (very different hues),
@@ -901,56 +902,193 @@
     return { centers: snapped, labels };
   }
 
-  /* ---------- Main pipeline ---------- */
-  function gridFromImage(img, gw, gh, k) {
-    const interW = gw * 3, interH = gh * 3;
-    const inter = document.createElement('canvas');
-    inter.width = interW; inter.height = interH;
-    const ictx = inter.getContext('2d');
-    ictx.imageSmoothingEnabled = true; ictx.imageSmoothingQuality = 'high';
+  /* ---------- ColorQuest (fixed-palette) dominant-color sampling ----------
+
+     For each grid cell, sample N×N pixels from the full-resolution source crop,
+     snap each pixel to the nearest ColorQuest palette color via Lab Delta-E,
+     then assign the MOST FREQUENT snapped color to the cell ("plurality vote").
+
+     This preserves dominant features (cartoon outlines, eye dots, accent colors)
+     that the previous "downsample then snap" path used to average away. */
+  function dominantColorGrid(img, gw, gh) {
+    /* Cover-fit crop math (same as before, but we keep the FULL crop size
+       instead of downsampling to grid resolution). */
     const ar = img.width / img.height, tar = gw / gh;
     let sx, sy, sw, sh;
     if (ar > tar) { sh = img.height; sw = sh * tar; sx = (img.width - sw)/2; sy = 0; }
     else { sw = img.width; sh = sw / tar; sx = 0; sy = (img.height - sh)/2; }
-    ictx.drawImage(img, sx, sy, sw, sh, 0, 0, interW, interH);
-    let id = ictx.getImageData(0, 0, interW, interH);
 
-    /* Pre-processing (saturation + sharpen + blur) helps Auto/Hierarchical
-       modes find better K-means clusters and smooth gradients, but in KDP
-       mode it DESTROYS pure black pixels by blurring them with neighbors,
-       turning crisp cartoon outlines into Dark Brown / Dark Gray after snap.
-       Skip pre-processing for KDP — we want the original colors preserved
-       so the 23 handcrafted reference colors can match them cleanly. */
-    const skipPreprocess = $('palStyle').value === 'kdp22';
-    if (!skipPreprocess) {
-      boostSaturation(id.data, 1.20);
-      sharpen(id.data, interW, interH, 0.6);
-      const blurred = boxBlur(id.data, interW, interH, 1);
-      const id2 = new ImageData(blurred, interW, interH);
-      ictx.putImageData(id2, 0, 0);
-    } else {
-      /* Light sharpen only — keeps edges crisp without diluting blacks */
-      sharpen(id.data, interW, interH, 0.4);
-      ictx.putImageData(id, 0, 0);
+    /* Draw the crop at FULL source resolution with smoothing OFF —
+       we want raw pixels, not browser interpolation. */
+    const cropW = Math.round(sw), cropH = Math.round(sh);
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = cropW; cropCanvas.height = cropH;
+    const cctx = cropCanvas.getContext('2d');
+    cctx.imageSmoothingEnabled = false;
+    cctx.drawImage(img, sx, sy, sw, sh, 0, 0, cropW, cropH);
+    const cropData = cctx.getImageData(0, 0, cropW, cropH).data;
+
+    /* Lazy-fill Lab values for the palette (Black, Gray, ... White) */
+    for (let i = 0; i < COLORQUEST_PALETTE.length; i++) {
+      if (!COLORQUEST_PALETTE_LAB[i]) {
+        const c = COLORQUEST_PALETTE[i].rgb;
+        COLORQUEST_PALETTE_LAB[i] = rgbToLab(c[0], c[1], c[2]);
+      }
     }
-    const c = document.createElement('canvas');
-    c.width = gw; c.height = gh;
-    const ctx = c.getContext('2d');
-    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(inter, 0, 0, gw, gh);
-    const data = ctx.getImageData(0, 0, gw, gh).data;
-    const samples = [];
-    for (let i = 0; i < data.length; i += 4) samples.push([data[i], data[i+1], data[i+2]]);
-    const anchors = findAnchors(samples);
-    const effectiveK = Math.max(k, anchors.length + 2);
+
+    /* Density of samples per cell: 5×5 is the recommended default — fast and
+       enough resolution for 35×50 grids on 1024×1536 source images. */
+    const SAMPLE_N = 5;
+    const grid = [];
+    for (let gy = 0; gy < gh; gy++) {
+      const row = new Array(gw);
+      for (let gx = 0; gx < gw; gx++) {
+        const px0 = (gx / gw) * cropW;
+        const px1 = ((gx + 1) / gw) * cropW;
+        const py0 = (gy / gh) * cropH;
+        const py1 = ((gy + 1) / gh) * cropH;
+        /* Sample SAMPLE_N × SAMPLE_N pixels evenly inside this cell's source region.
+           Each sample is snapped independently to the nearest palette color. */
+        const counts = new Int32Array(COLORQUEST_PALETTE.length);
+        for (let si = 0; si < SAMPLE_N; si++) {
+          for (let sj = 0; sj < SAMPLE_N; sj++) {
+            const px = Math.min(cropW - 1, Math.floor(px0 + ((si + 0.5) / SAMPLE_N) * (px1 - px0)));
+            const py = Math.min(cropH - 1, Math.floor(py0 + ((sj + 0.5) / SAMPLE_N) * (py1 - py0)));
+            const ii = (py * cropW + px) * 4;
+            const sLab = rgbToLab(cropData[ii], cropData[ii+1], cropData[ii+2]);
+            let bestI = 0, bestDE = Infinity;
+            for (let j = 0; j < COLORQUEST_PALETTE.length; j++) {
+              const de = deltaE(sLab, COLORQUEST_PALETTE_LAB[j]);
+              if (de < bestDE) { bestDE = de; bestI = j; }
+            }
+            counts[bestI]++;
+          }
+        }
+        /* Plurality vote — most frequent snapped color wins. */
+        let bestColor = 0, bestCount = -1;
+        for (let j = 0; j < counts.length; j++) {
+          if (counts[j] > bestCount) { bestCount = counts[j]; bestColor = j; }
+        }
+        row[gx] = bestColor;
+      }
+      grid.push(row);
+    }
+    return grid;
+  }
+
+  /* Enforce maximum number of active paintable colors.
+     White is treated as a blank (not counted toward the limit).
+     Strategy: count cells per color, keep top-N most-used colors, replace each
+     cell of a non-kept color with the dominant color among its 8 neighbors that
+     is in the kept set (falls back to nearest active color in Lab space). */
+  function enforceMaxColors(grid, maxColors) {
+    const gh = grid.length, gw = grid[0].length;
+    const whiteIdx = COLORQUEST_PALETTE.findIndex(c => c.name === 'White');
+    /* Count cells per color */
+    const counts = new Int32Array(COLORQUEST_PALETTE.length);
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) counts[grid[y][x]]++;
+    }
+    /* Pick the top-N most-used paintable colors (exclude White from the count) */
+    const paintable = [];
+    for (let i = 0; i < counts.length; i++) {
+      if (i === whiteIdx) continue;
+      if (counts[i] > 0) paintable.push({ idx: i, count: counts[i] });
+    }
+    paintable.sort((a, b) => b.count - a.count);
+    if (paintable.length <= maxColors) return grid;  /* already within budget */
+    const kept = new Set(paintable.slice(0, maxColors).map(p => p.idx));
+    if (whiteIdx >= 0 && counts[whiteIdx] > 0) kept.add(whiteIdx);  /* White always allowed */
+
+    /* Replace each cell whose color is not in `kept` */
+    const out = grid.map(r => r.slice());
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        if (kept.has(grid[y][x])) continue;
+        /* Try dominant 8-neighbor color among kept set first */
+        const nbrCounts = {};
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= gw || ny < 0 || ny >= gh) continue;
+            const nc = grid[ny][nx];
+            if (kept.has(nc)) nbrCounts[nc] = (nbrCounts[nc] || 0) + 1;
+          }
+        }
+        let best = -1, bestN = 0;
+        for (const k in nbrCounts) {
+          if (nbrCounts[k] > bestN) { bestN = nbrCounts[k]; best = parseInt(k); }
+        }
+        if (best >= 0) { out[y][x] = best; continue; }
+        /* Fallback: nearest active color in Lab space */
+        const sLab = COLORQUEST_PALETTE_LAB[grid[y][x]];
+        let bestI = grid[y][x], bestDE = Infinity;
+        for (const ki of kept) {
+          const de = deltaE(sLab, COLORQUEST_PALETTE_LAB[ki]);
+          if (de < bestDE) { bestDE = de; bestI = ki; }
+        }
+        out[y][x] = bestI;
+      }
+    }
+    return out;
+  }
+
+  /* ---------- Main pipeline ---------- */
+  function gridFromImage(img, gw, gh, k) {
     const palStyle = $('palStyle').value;
 
-    /* KDP mode is fundamentally different: fixed 22-color palette with
-       stable numbers. Skip K-means, snap, perceptual distance — all the
-       "natural color matching" logic that would re-number colors. */
+    /* ColorQuest fixed-palette mode uses dominant-color sampling.
+       No pre-processing, no smoothing — we want raw, dominant features. */
     if (palStyle === 'kdp22') {
-      const { centers, labels } = kdpStandardPalette(samples);
-      /* Build grid using KDP palette indices directly */
+      let grid = dominantColorGrid(img, gw, gh);
+
+      /* Enforce max-color budget (k = difficulty setting). White doesn't count. */
+      grid = enforceMaxColors(grid, k);
+
+      /* Optional small-cluster cleanup */
+      const cleanupThreshold = parseInt($('cleanup').value) || 0;
+      if (cleanupThreshold > 0) grid = cleanupGrid(grid, cleanupThreshold);
+
+      /* Track which palette indices are actually used */
+      const used = new Set();
+      for (let y = 0; y < gh; y++) {
+        for (let x = 0; x < gw; x++) used.add(grid[y][x]);
+      }
+      const palette = COLORQUEST_PALETTE.map(c => c.rgb.slice());
+      const paletteNames = COLORQUEST_PALETTE.map(c => c.name);
+      return { grid, palette, paletteNames, usedSet: used, kdpMode: true };
+    }
+
+    /* Legacy KDP path: browser-downsample + per-pixel snap.
+       Kept available so users can compare new vs old output. */
+    if (palStyle === 'kdp22_legacy') {
+      const interW = gw * 3, interH = gh * 3;
+      const inter = document.createElement('canvas');
+      inter.width = interW; inter.height = interH;
+      const ictx = inter.getContext('2d');
+      ictx.imageSmoothingEnabled = true; ictx.imageSmoothingQuality = 'high';
+      const ar = img.width / img.height, tar = gw / gh;
+      let sx, sy, sw, sh;
+      if (ar > tar) { sh = img.height; sw = sh * tar; sx = (img.width - sw)/2; sy = 0; }
+      else { sw = img.width; sh = sw / tar; sx = 0; sy = (img.height - sh)/2; }
+      ictx.drawImage(img, sx, sy, sw, sh, 0, 0, interW, interH);
+      let id = ictx.getImageData(0, 0, interW, interH);
+      /* Legacy preprocessing: light sharpen only (no saturation/blur for KDP). */
+      sharpen(id.data, interW, interH, 0.4);
+      ictx.putImageData(id, 0, 0);
+      const c = document.createElement('canvas');
+      c.width = gw; c.height = gh;
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(inter, 0, 0, gw, gh);
+      const data = ctx.getImageData(0, 0, gw, gh).data;
+      const samples = [];
+      for (let i = 0; i < data.length; i += 4) samples.push([data[i], data[i+1], data[i+2]]);
+
+      /* Snap each pixel to nearest palette color via Lab distance (kdpStandardPalette).
+         No K-means, no perceptual distance enforcement, no max-color limit. */
+      const { labels } = kdpStandardPalette(samples);
       let grid = [];
       for (let y = 0; y < gh; y++) {
         const row = [];
@@ -960,15 +1098,14 @@
       /* Optional cleanup */
       const cleanupThreshold = parseInt($('cleanup').value) || 0;
       if (cleanupThreshold > 0) grid = cleanupGrid(grid, cleanupThreshold);
-      /* Find which of the 22 colors are actually used in this image */
-      const used = new Set();
+      /* Legacy artifact removal: drop colors used in <0.3% of cells,
+         replace with nearest non-rare KDP color in Lab space. */
+      let used = new Set();
       for (let y = 0; y < gh; y++) {
         for (let x = 0; x < gw; x++) used.add(grid[y][x]);
       }
-      /* Drop tiny color usage (< 0.3% of cells) — likely JPEG artifacts.
-         Reassign those cells to their most common neighbor among USED colors. */
       const totalCells = gh * gw;
-      const counts = new Array(KDP_22.length).fill(0);
+      const counts = new Array(COLORQUEST_PALETTE.length).fill(0);
       for (let y = 0; y < gh; y++) {
         for (let x = 0; x < gw; x++) counts[grid[y][x]]++;
       }
@@ -980,30 +1117,55 @@
         for (let y = 0; y < gh; y++) {
           for (let x = 0; x < gw; x++) {
             if (!tooRare.has(grid[y][x])) continue;
-            /* Replace with closest non-rare KDP color */
-            const sLab = KDP_22_LAB[grid[y][x]];
+            const sLab = COLORQUEST_PALETTE_LAB[grid[y][x]];
             let bestI = grid[y][x], bestDE = Infinity;
-            for (let j = 0; j < KDP_22.length; j++) {
+            for (let j = 0; j < COLORQUEST_PALETTE.length; j++) {
               if (tooRare.has(j)) continue;
-              const de = deltaE(sLab, KDP_22_LAB[j]);
+              const de = deltaE(sLab, COLORQUEST_PALETTE_LAB[j]);
               if (de < bestDE) { bestDE = de; bestI = j; }
             }
             grid[y][x] = bestI;
           }
         }
-        /* Recompute used set */
         used.clear();
         for (let y = 0; y < gh; y++) {
           for (let x = 0; x < gw; x++) used.add(grid[y][x]);
         }
       }
-      /* Build the palette as full KDP_22 — but the legend will only show
-         used colors. We keep KDP indices stable (don't compact). */
-      const palette = KDP_22.map(c => c.rgb.slice());
-      const paletteNames = KDP_22.map(c => c.name);
-      const usedSet = used;
-      return { grid, palette, paletteNames, usedSet, kdpMode: true };
+      const palette = COLORQUEST_PALETTE.map(c => c.rgb.slice());
+      const paletteNames = COLORQUEST_PALETTE.map(c => c.name);
+      return { grid, palette, paletteNames, usedSet: used, kdpMode: true };
     }
+
+    /* Auto and Hierarchical modes — keep the original downsample+snap path. */
+    const interW = gw * 3, interH = gh * 3;
+    const inter = document.createElement('canvas');
+    inter.width = interW; inter.height = interH;
+    const ictx = inter.getContext('2d');
+    ictx.imageSmoothingEnabled = true; ictx.imageSmoothingQuality = 'high';
+    const ar = img.width / img.height, tar = gw / gh;
+    let sx, sy, sw, sh;
+    if (ar > tar) { sh = img.height; sw = sh * tar; sx = (img.width - sw)/2; sy = 0; }
+    else { sw = img.width; sh = sw / tar; sx = 0; sy = (img.height - sh)/2; }
+    ictx.drawImage(img, sx, sy, sw, sh, 0, 0, interW, interH);
+    let id = ictx.getImageData(0, 0, interW, interH);
+    boostSaturation(id.data, 1.20);
+    sharpen(id.data, interW, interH, 0.6);
+    const blurred = boxBlur(id.data, interW, interH, 1);
+    const id2 = new ImageData(blurred, interW, interH);
+    ictx.putImageData(id2, 0, 0);
+    const c = document.createElement('canvas');
+    c.width = gw; c.height = gh;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(inter, 0, 0, gw, gh);
+    const data = ctx.getImageData(0, 0, gw, gh).data;
+    const samples = [];
+    for (let i = 0; i < data.length; i += 4) samples.push([data[i], data[i+1], data[i+2]]);
+    const anchors = findAnchors(samples);
+    const effectiveK = Math.max(k, anchors.length + 2);
+
+    /* KDP mode handled in early-return path above (dominant-color sampling). */
 
     let centers, labels;
     if (palStyle === 'hierarchical') {
@@ -1208,7 +1370,7 @@
       const bg = $('bgMode').value === 'white' ? '#fff' : '#000';
       ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
       const fontPt = Math.max(4, Math.floor(cellPx * 0.50));
-      const labels = kdpMode ? KDP_22.map(c => c.label) : null;
+      const labels = kdpMode ? COLORQUEST_PALETTE.map(c => c.label) : null;
       drawGrid(ctx, grid, palette, 10, 10, cellPx, state.shape, bg, fontPt, mode, labels);
       stage.appendChild(c);
     };
@@ -1220,12 +1382,12 @@
       /* KDP mode: show only used colors, with names + single-char labels (0-9, A-M).
          Skip White — those cells are meant to be left blank on the page. */
       const sortedUsed = Array.from(usedSet)
-        .filter(i => KDP_22[i].label !== '')
+        .filter(i => COLORQUEST_PALETTE[i].label !== '')
         .sort((a, b) => a - b);
       sortedUsed.forEach(i => {
         const c = palette[i];
         const nm = paletteNames[i];
-        const lbl = KDP_22[i].label;
+        const lbl = COLORQUEST_PALETTE[i].label;
         const sw = document.createElement('div');
         sw.className = 'swatch';
         sw.innerHTML = '<span class="chip" style="background:rgb('+c[0]+','+c[1]+','+c[2]+')"></span><span class="num">'+lbl+'</span><span style="margin-left:4px">'+nm+'</span>';
@@ -1262,10 +1424,10 @@
     listText += gw + '×' + gh + ' · ' + (kdpMode ? usedSet.size : palette.length) + ' colors\n\n';
     if (kdpMode) {
       const sortedUsed = Array.from(usedSet)
-        .filter(i => KDP_22[i].label !== '')
+        .filter(i => COLORQUEST_PALETTE[i].label !== '')
         .sort((a, b) => a - b);
       sortedUsed.forEach(i => {
-        listText += KDP_22[i].label + ' = ' + paletteNames[i] + '\n';
+        listText += COLORQUEST_PALETTE[i].label + ' = ' + paletteNames[i] + '\n';
       });
     } else {
       palette.forEach((c, i) => {
@@ -1443,7 +1605,7 @@
            Empty label (White) → leave cell blank. */
         /* In KDP mode use single-char label (0-9, A-M); else use 1-indexed number.
            Empty label (White) → leave cell blank. */
-        const text = result.kdpMode ? KDP_22[v].label : String(v + 1);
+        const text = result.kdpMode ? COLORQUEST_PALETTE[v].label : String(v + 1);
         if (text !== '') doc.text(text, cx, ny, { align: 'center', baseline: 'middle' });
       }
     }
@@ -1507,7 +1669,7 @@
     ctx.fillStyle = isWhite ? '#fff' : '#000';
     ctx.fillRect(0, 0, W, H);
     const fontPt = Math.floor(CELL * 0.42);
-    const labels = result.kdpMode ? KDP_22.map(c => c.label) : null;
+    const labels = result.kdpMode ? COLORQUEST_PALETTE.map(c => c.label) : null;
     /* Center the hex grid horizontally and vertically inside the canvas */
     let drawOx = PAD;
     if (state.shape === 'hexagon') {
