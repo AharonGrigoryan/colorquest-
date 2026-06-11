@@ -63,7 +63,7 @@
   .hint { font-size: 11px; color: var(--ink-dim); margin-top: 4px; line-height: 1.4; font-family: 'JetBrains Mono', monospace; }
 
   .shape-pick, .diff-pick { display: grid; gap: 6px; }
-  .shape-pick { grid-template-columns: repeat(4, 1fr); }
+  .shape-pick { grid-template-columns: repeat(5, 1fr); }
   .diff-pick { grid-template-columns: repeat(2, 1fr); }
   .shape-pick button, .diff-pick button {
     background: #08080d; border: 1px solid var(--line); border-radius: 8px; padding: 10px 6px;
@@ -178,9 +178,9 @@
       <div class="field">
         <label>Difficulty</label>
         <div class="diff-pick" id="diffPick">
-          <button class="on" data-diff="standard" data-w="35" data-h="50" data-k="13"><span class="lbl">Standard</span><span class="det">35×50 · 13 colors</span></button>
-          <button data-diff="easy" data-w="35" data-h="50" data-k="8"><span class="lbl">Easy</span><span class="det">35×50 · 8 colors</span></button>
-          <button data-diff="hard" data-w="35" data-h="50" data-k="18"><span class="lbl">Hard</span><span class="det">35×50 · 18 colors</span></button>
+          <button class="on" data-diff="standard" data-k="13"><span class="lbl">Standard</span><span class="det" id="presetStandardDet">38×57 · 13 colors</span></button>
+          <button data-diff="easy" data-k="8"><span class="lbl">Easy</span><span class="det" id="presetEasyDet">38×57 · 8 colors</span></button>
+          <button data-diff="hard" data-k="18"><span class="lbl">Hard</span><span class="det" id="presetHardDet">38×57 · 18 colors</span></button>
           <button data-diff="custom"><span class="lbl">Custom</span><span class="det">advanced</span></button>
         </div>
       </div>
@@ -192,6 +192,7 @@
           <button data-shape="triangle"><svg viewBox="0 0 24 24"><path d="M12 3 L21 20 L3 20 Z"/></svg>Triangle</button>
           <button data-shape="hexagon"><svg viewBox="0 0 24 24"><path d="M12 2 L21 7 L21 17 L12 22 L3 17 L3 7 Z"/></svg>Hexagon</button>
           <button data-shape="square"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16"/></svg>Square</button>
+          <button data-shape="diamond"><svg viewBox="0 0 24 24"><path d="M12 3 L21 12 L12 21 L3 12 Z"/></svg>Diamond</button>
         </div>
       </div>
 
@@ -215,11 +216,11 @@
         <div class="row" style="margin-top:8px;">
           <div class="field">
             <label>Width (cells)</label>
-            <input type="number" id="gridW" value="45" min="10" max="120">
+            <input type="number" id="gridW" value="38" min="10" max="120">
           </div>
           <div class="field">
             <label>Height (cells)</label>
-            <input type="number" id="gridH" value="60" min="10" max="160">
+            <input type="number" id="gridH" value="57" min="10" max="160">
           </div>
         </div>
         <div class="row">
@@ -343,11 +344,46 @@
       });
     };
   });
+  /* Shape-aware default grid dimensions, derived from Pixelcolorist's
+     #1 bestseller "100 Color by Number Mysteries" market standard:
+       Circle / Hexagon: 38×57 (hex-packed, yPitch ≈ 0.866) → 2,166 cells
+       Square / Triangle: 38×50 (regular grid, yPitch = 1)   → 1,900 cells
+       Diamond:           26×72 (rhombic, yPitch ≈ 0.5)      → 1,872 cells
+     Each shape's grid is tuned to fit the 8.5×11 KDP page with the
+     correct aspect ratio for that shape's geometry. */
+  function shapeDefaultGrid(shape) {
+    if (shape === 'circle' || shape === 'hexagon') return { w: 38, h: 57 };
+    if (shape === 'diamond') return { w: 26, h: 72 };
+    return { w: 38, h: 50 }; /* square, triangle */
+  }
+  function applyPresetForShape(diffBtn) {
+    if (!diffBtn || diffBtn.dataset.diff === 'custom') return;
+    const def = shapeDefaultGrid(state.shape);
+    $('gridW').value = def.w;
+    $('gridH').value = def.h;
+    $('numColors').value = diffBtn.dataset.k;
+  }
+  function updatePresetLabels() {
+    /* Refresh the "38×57 · N colors" text on each preset button when shape changes */
+    const def = shapeDefaultGrid(state.shape);
+    const dims = def.w + '×' + def.h;
+    const e1 = document.getElementById('presetStandardDet');
+    const e2 = document.getElementById('presetEasyDet');
+    const e3 = document.getElementById('presetHardDet');
+    if (e1) e1.textContent = dims + ' · 13 colors';
+    if (e2) e2.textContent = dims + ' · 8 colors';
+    if (e3) e3.textContent = dims + ' · 18 colors';
+  }
   document.querySelectorAll('#shapePick button').forEach(b => {
     b.onclick = () => {
       document.querySelectorAll('#shapePick button').forEach(x => x.classList.remove('on'));
       b.classList.add('on');
       state.shape = b.dataset.shape;
+      /* When shape changes, refresh preset labels AND re-apply the active
+         difficulty preset using the new shape's defaults. */
+      updatePresetLabels();
+      const active = document.querySelector('#diffPick button.on');
+      applyPresetForShape(active);
     };
   });
   document.querySelectorAll('#diffPick button').forEach(b => {
@@ -356,7 +392,7 @@
       b.classList.add('on');
       state.diff = b.dataset.diff;
       if (state.diff !== 'custom') {
-        $('gridW').value = b.dataset.w; $('gridH').value = b.dataset.h; $('numColors').value = b.dataset.k;
+        applyPresetForShape(b);
       } else { $('advWrap').open = true; }
     };
   });
@@ -910,10 +946,21 @@
 
      This preserves dominant features (cartoon outlines, eye dots, accent colors)
      that the previous "downsample then snap" path used to average away. */
-  function dominantColorGrid(img, gw, gh) {
-    /* Cover-fit crop math (same as before, but we keep the FULL crop size
-       instead of downsampling to grid resolution). */
-    const ar = img.width / img.height, tar = gw / gh;
+  function dominantColorGrid(img, gw, gh, shape) {
+    /* Physical geometry of the rendered grid depends on the cell shape:
+       - hex / circle / diamond render with offset rows (extra cell/2 width)
+       - hex / circle use yPitch ≈ 0.866 (close-packed rows)
+       - diamond uses yPitch = 0.5 (rhombic tessellation)
+       The cover-fit crop target aspect MUST match this physical aspect,
+       otherwise the sampled image is squashed/stretched vs the page.
+       Without this fix, diamond (yPitch 0.5 + offset) gets a 2× horizontal
+       stretch — head oversized, horn and stars cropped out. */
+    const yPitch = (shape === 'hexagon' || shape === 'circle') ? 0.86
+                 : (shape === 'diamond' ? 0.5 : 1);
+    const hasOffset = (shape === 'hexagon' || shape === 'circle' || shape === 'diamond');
+    const tar = (gw + (hasOffset ? 0.5 : 0)) / (gh * yPitch);
+
+    const ar = img.width / img.height;
     let sx, sy, sw, sh;
     if (ar > tar) { sh = img.height; sw = sh * tar; sx = (img.width - sw)/2; sy = 0; }
     else { sw = img.width; sh = sw / tar; sx = 0; sy = (img.height - sh)/2; }
@@ -937,14 +984,19 @@
     }
 
     /* Density of samples per cell: 5×5 is the recommended default — fast and
-       enough resolution for 35×50 grids on 1024×1536 source images. */
+       enough resolution for typical 26×72..38×57 grids on 1024×1536 sources. */
     const SAMPLE_N = 5;
+    /* Effective horizontal cell pitch in the crop, accounting for the half-cell
+       extra width that offset rows add. Per-cell sample x positions follow this
+       so odd rows are sampled from the same source area that they're rendered. */
+    const denom = hasOffset ? gw + 0.5 : gw;
     const grid = [];
     for (let gy = 0; gy < gh; gy++) {
+      const xOff = hasOffset ? (gy % 2) * 0.5 : 0;
       const row = new Array(gw);
       for (let gx = 0; gx < gw; gx++) {
-        const px0 = (gx / gw) * cropW;
-        const px1 = ((gx + 1) / gw) * cropW;
+        const px0 = ((gx + xOff) / denom) * cropW;
+        const px1 = ((gx + 1 + xOff) / denom) * cropW;
         const py0 = (gy / gh) * cropH;
         const py1 = ((gy + 1) / gh) * cropH;
         /* Sample SAMPLE_N × SAMPLE_N pixels evenly inside this cell's source region.
@@ -1037,11 +1089,12 @@
   /* ---------- Main pipeline ---------- */
   function gridFromImage(img, gw, gh, k) {
     const palStyle = $('palStyle').value;
+    const shape = state.shape;
 
     /* ColorQuest fixed-palette mode uses dominant-color sampling.
        No pre-processing, no smoothing — we want raw, dominant features. */
     if (palStyle === 'kdp22') {
-      let grid = dominantColorGrid(img, gw, gh);
+      let grid = dominantColorGrid(img, gw, gh, shape);
 
       /* Enforce max-color budget (k = difficulty setting). White doesn't count. */
       grid = enforceMaxColors(grid, k);
@@ -1068,7 +1121,13 @@
       inter.width = interW; inter.height = interH;
       const ictx = inter.getContext('2d');
       ictx.imageSmoothingEnabled = true; ictx.imageSmoothingQuality = 'high';
-      const ar = img.width / img.height, tar = gw / gh;
+      /* Shape-aware cover-fit target so the crop's aspect matches the rendered
+         page (otherwise diamond gets ~2× horizontal stretch, hex/circle ~15%). */
+      const yPitch = (shape === 'hexagon' || shape === 'circle') ? 0.86
+                   : (shape === 'diamond' ? 0.5 : 1);
+      const hasOffset = (shape === 'hexagon' || shape === 'circle' || shape === 'diamond');
+      const ar = img.width / img.height;
+      const tar = (gw + (hasOffset ? 0.5 : 0)) / (gh * yPitch);
       let sx, sy, sw, sh;
       if (ar > tar) { sh = img.height; sw = sh * tar; sx = (img.width - sw)/2; sy = 0; }
       else { sw = img.width; sh = sw / tar; sx = 0; sy = (img.height - sh)/2; }
@@ -1143,7 +1202,12 @@
     inter.width = interW; inter.height = interH;
     const ictx = inter.getContext('2d');
     ictx.imageSmoothingEnabled = true; ictx.imageSmoothingQuality = 'high';
-    const ar = img.width / img.height, tar = gw / gh;
+    /* Shape-aware cover-fit target (same fix as KDP paths) */
+    const yPitch = (shape === 'hexagon' || shape === 'circle') ? 0.86
+                 : (shape === 'diamond' ? 0.5 : 1);
+    const hasOffset = (shape === 'hexagon' || shape === 'circle' || shape === 'diamond');
+    const ar = img.width / img.height;
+    const tar = (gw + (hasOffset ? 0.5 : 0)) / (gh * yPitch);
     let sx, sy, sw, sh;
     if (ar > tar) { sh = img.height; sw = sh * tar; sx = (img.width - sw)/2; sy = 0; }
     else { sw = img.width; sh = sw / tar; sx = 0; sy = (img.height - sh)/2; }
@@ -1256,16 +1320,20 @@
     const stroke = bg === '#fff' ? '#000' : '#fff';
     ctx.lineWidth = Math.max(0.5, cell * 0.04);
     const gh = grid.length, gw = grid[0].length;
-    const yPitch = shape === 'hexagon' ? 0.86 : 1;
+    const yPitch = (shape === 'hexagon' || shape === 'circle') ? 0.86 : (shape === 'diamond' ? 0.5 : 1);
     for (let y = 0; y < gh; y++) {
       for (let x = 0; x < gw; x++) {
         const v = grid[y][x];
         let cx, cy;
-        if (shape === 'hexagon') {
+        if (shape === 'hexagon' || shape === 'circle' || shape === 'diamond') {
+          /* Offset rows: every other row shifted by half a cell horizontally.
+             For diamond (combined with yPitch=0.5) this gives proper rhombic
+             tessellation where adjacent diamonds across rows share full edges. */
           const rowOffset = (y % 2) * cell * 0.5;
           cx = ox + x*cell + cell/2 + rowOffset;
           cy = oy + y*cell*yPitch + cell/2;
         } else {
+          /* Squares, circles, triangles: regular grid, no offset */
           cx = ox + x*cell + cell/2;
           cy = oy + y*cell + cell/2;
         }
@@ -1300,6 +1368,23 @@
           ctx.quadraticCurveTo(x0, y0 + sz, x0, y0 + sz - rad);
           ctx.lineTo(x0, y0 + rad);
           ctx.quadraticCurveTo(x0, y0, x0 + rad, y0);
+          ctx.closePath();
+        } else if (shape === 'diamond') {
+          /* Square diamond with proper rhombic tessellation (yPitch=0.5 + offset
+             rows handle the positioning). r = cell * 0.42 leaves ~16% visible gap.
+             Each corner rounded with quadraticCurveTo to soften the 90° tips. */
+          const r = cell * 0.42;
+          const rad = r * 0.22;
+          const s = rad * 0.707;
+          ctx.moveTo(cx + s, cy - r + s);
+          ctx.lineTo(cx + r - s, cy - s);
+          ctx.quadraticCurveTo(cx + r, cy, cx + r - s, cy + s);
+          ctx.lineTo(cx + s, cy + r - s);
+          ctx.quadraticCurveTo(cx, cy + r, cx - s, cy + r - s);
+          ctx.lineTo(cx - r + s, cy + s);
+          ctx.quadraticCurveTo(cx - r, cy, cx - r + s, cy - s);
+          ctx.lineTo(cx - s, cy - r + s);
+          ctx.quadraticCurveTo(cx, cy - r, cx + s, cy - r + s);
           ctx.closePath();
         }
         if (isFilled) {
@@ -1359,8 +1444,8 @@
       stage.innerHTML = '';
       const cellPx = Math.max(7, Math.min(14, Math.floor(640 / gw)));
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const yPitch = state.shape === 'hexagon' ? 0.86 : 1;
-      const W = gw * cellPx + 20 + (state.shape === 'hexagon' ? cellPx/2 : 0);
+      const yPitch = (state.shape === 'hexagon' || state.shape === 'circle') ? 0.86 : (state.shape === 'diamond' ? 0.5 : 1);
+      const W = gw * cellPx + 20 + ((state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') ? cellPx/2 : 0);
       const H = Math.ceil(gh * cellPx * yPitch) + 20;
       const c = document.createElement('canvas');
       c.width = W * dpr; c.height = H * dpr;
@@ -1554,9 +1639,9 @@
     /* No legend on PDF — color list is shown in UI for copying. Use full page for grid. */
     const availW = pw - margin*2;
     const availH = ph - margin*2;
-    const yPitch = state.shape === 'hexagon' ? 0.86 : 1;
+    const yPitch = (state.shape === 'hexagon' || state.shape === 'circle') ? 0.86 : (state.shape === 'diamond' ? 0.5 : 1);
     const cell = Math.min(availW / gw, availH / (gh * yPitch));
-    const totalGridW = gw*cell + (state.shape === 'hexagon' ? cell*0.5 : 0);
+    const totalGridW = gw*cell + ((state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') ? cell*0.5 : 0);
     const totalGridH = gh*cell*yPitch;
     const ox = margin + (availW - totalGridW) / 2;
     const oy = margin + (availH - totalGridH) / 2;
@@ -1570,7 +1655,7 @@
     for (let y = 0; y < gh; y++) {
       for (let x = 0; x < gw; x++) {
         let cx, cy;
-        if (state.shape === 'hexagon') {
+        if (state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') {
           const rowOffset = (y % 2) * cell * 0.5;
           cx = ox + x*cell + cell/2 + rowOffset;
           cy = oy + y*cell*yPitch + cell/2;
@@ -1588,7 +1673,7 @@
       for (let x = 0; x < gw; x++) {
         const v = grid[y][x];
         let cx, cy;
-        if (state.shape === 'hexagon') {
+        if (state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') {
           const rowOffset = (y % 2) * cell * 0.5;
           cx = ox + x*cell + cell/2 + rowOffset;
           cy = oy + y*cell*yPitch + cell/2;
@@ -1648,7 +1733,7 @@
     const BASE = 50;
     const PAD = 40;
     let CELL, yPitch, W, H;
-    if (state.shape === 'hexagon') {
+    if (state.shape === 'hexagon' || state.shape === 'circle') {
       /* Adjust hex cell size so canvas dims match a square grid of BASE=50. */
       const cellByW = (gw * BASE) / (gw + 0.5);
       const cellByH = BASE / 0.86;
@@ -1656,6 +1741,13 @@
       yPitch = 0.86;
       W = gw * BASE + PAD * 2;
       H = gh * BASE + PAD * 2;
+    } else if (state.shape === 'diamond') {
+      /* Diamond uses yPitch=0.5 + offset rows for rhombic tessellation.
+         Canvas height is halved (50 rows render as 25 cells of visual height). */
+      CELL = BASE;
+      yPitch = 0.5;
+      W = gw * CELL + CELL/2 + PAD * 2;
+      H = Math.ceil(gh * CELL * yPitch) + PAD * 2;
     } else {
       CELL = BASE;
       yPitch = 1;
@@ -1670,14 +1762,14 @@
     ctx.fillRect(0, 0, W, H);
     const fontPt = Math.floor(CELL * 0.42);
     const labels = result.kdpMode ? COLORQUEST_PALETTE.map(c => c.label) : null;
-    /* Center the hex grid horizontally and vertically inside the canvas */
+    /* Center the offset-row grid (hex, circle, diamond) inside the canvas */
     let drawOx = PAD;
-    if (state.shape === 'hexagon') {
+    if (state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') {
       const drawnW = gw * CELL + CELL/2;
       drawOx = (W - drawnW) / 2;
     }
     let drawOy = PAD;
-    if (state.shape === 'hexagon') {
+    if (state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') {
       const drawnH = gh * CELL * yPitch;
       drawOy = PAD + (H - PAD*2 - drawnH) / 2;
     }
