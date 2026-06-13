@@ -6,6 +6,7 @@
 <title>ColorQuest — Color By Number Generator</title>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=JetBrains+Mono:wght@400;600&family=Caveat:wght@400;600&family=Patrick+Hand&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   :root {
     --bg: #0a0a0f;
@@ -226,7 +227,7 @@
         <div class="row">
           <div class="field">
             <label>Colors</label>
-            <input type="number" id="numColors" value="14" min="2" max="36">
+            <input type="number" id="numColors" value="13" min="2" max="36">
           </div>
           <div class="field">
             <label>Background</label>
@@ -263,6 +264,66 @@
         <button class="btn-ghost" id="pngBtn" disabled>Build PNG</button>
         <button class="btn-ghost" id="pngFilledBtn" disabled>Build PNG (Filled)</button>
       </div>
+
+      <!-- ── Export for site (mini-website conveyor) ───────────────── -->
+      <details id="siteExportPanel" style="margin-top:14px; border:1px solid var(--line); border-radius:12px; padding:0;">
+        <summary style="cursor:pointer; padding:12px 14px; font-weight:600; list-style:none;">
+          🌐 Export for site
+          <span style="color:var(--ink-dim); font-weight:400; font-size:0.85em;"> — one ZIP for your free-pages website</span>
+        </summary>
+        <div style="padding:0 14px 14px;">
+          <div class="hint" style="margin-bottom:10px;">
+            Fill these in, then download a ready-to-publish ZIP (meta.json + preview.png + page.pdf).
+            On the site: <code>npm run add -- ./penguin.zip</code>
+          </div>
+          <div style="display:grid; gap:10px;">
+            <label style="display:grid; gap:4px;">
+              <span style="font-size:0.85em; color:var(--ink-dim);">Title</span>
+              <input id="seTitle" type="text" placeholder="e.g. Clay Penguin"
+                     style="padding:8px 10px; background:var(--bg-2); border:1px solid var(--line); border-radius:8px; color:var(--ink); font-family:inherit;">
+            </label>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+              <label style="display:grid; gap:4px;">
+                <span style="font-size:0.85em; color:var(--ink-dim);">Category</span>
+                <input id="seCategory" type="text" placeholder="animals" list="seCatList"
+                       style="padding:8px 10px; background:var(--bg-2); border:1px solid var(--line); border-radius:8px; color:var(--ink); font-family:inherit;">
+                <datalist id="seCatList">
+                  <option value="animals"><option value="nature"><option value="objects">
+                  <option value="fantasy"><option value="food"><option value="seasonal">
+                </datalist>
+              </label>
+              <label style="display:grid; gap:4px;">
+                <span style="font-size:0.85em; color:var(--ink-dim);">Difficulty</span>
+                <select id="seDifficulty"
+                        style="padding:8px 10px; background:var(--bg-2); border:1px solid var(--line); border-radius:8px; color:var(--ink); font-family:inherit;">
+                  <option value="easy">easy</option>
+                  <option value="medium" selected>medium</option>
+                  <option value="hard">hard</option>
+                </select>
+              </label>
+            </div>
+            <label style="display:grid; gap:4px;">
+              <span style="font-size:0.85em; color:var(--ink-dim);">Tags (comma separated)</span>
+              <input id="seTags" type="text" placeholder="animal, winter, cute"
+                     style="padding:8px 10px; background:var(--bg-2); border:1px solid var(--line); border-radius:8px; color:var(--ink); font-family:inherit;">
+            </label>
+            <label style="display:grid; gap:4px;">
+              <span style="font-size:0.85em; color:var(--ink-dim);">Description (optional)</span>
+              <textarea id="seDescription" rows="2" placeholder="A cozy little mystery to reveal square by square..."
+                        style="padding:8px 10px; background:var(--bg-2); border:1px solid var(--line); border-radius:8px; color:var(--ink); font-family:inherit; resize:vertical;"></textarea>
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:0.9em;">
+              <input id="seFeatured" type="checkbox">
+              <span>Feature on homepage</span>
+            </label>
+          </div>
+          <button class="btn-primary" id="siteExportBtn" disabled style="margin-top:12px; width:100%;">
+            📦 Download site ZIP
+          </button>
+          <div class="hint" id="seHint" style="margin-top:8px;">Generate a page first (uses page 1).</div>
+        </div>
+      </details>
+
       <div class="progress" id="progress" style="display:none"><div class="progress-bar" id="progressBar"></div></div>
       <div class="status" id="status">Pick difficulty and one or more images, then press generate.</div>
       <div id="dlOut"></div>
@@ -288,7 +349,7 @@
 <script>
 (function(){
   const $ = id => document.getElementById(id);
-  const state = { shape: 'circle', mode: 'image', images: [], results: [], diff: 'medium' };
+  const state = { shape: 'circle', mode: 'image', images: [], results: [], diff: 'standard' };
 
   /* Fixed 23-color palette for KDP black-and-white book printing.
      Numbering uses single-character labels: 0-9 then A-M (Sunlife system).
@@ -319,8 +380,16 @@
     { name: 'Magenta',      label: 'M', rgb: [200, 50, 150] },
     { name: 'White',        label: '',  rgb: [255, 255, 255] },
   ];
-  /* Pre-compute Lab values for fast snap during generation */
-  const COLORQUEST_PALETTE_LAB = COLORQUEST_PALETTE.map(c => null); /* lazy-filled on first use */
+  /* Pre-computed Lab values for fast snap during generation (eager, not lazy —
+     the lazy-fill pattern was a footgun: three separate call sites had to
+     remember to fill it). */
+  let COLORQUEST_PALETTE_LAB = null;
+  function paletteLab() {
+    if (!COLORQUEST_PALETTE_LAB) {
+      COLORQUEST_PALETTE_LAB = COLORQUEST_PALETTE.map(c => rgbToLab(c.rgb[0], c.rgb[1], c.rgb[2]));
+    }
+    return COLORQUEST_PALETTE_LAB;
+  }
 
   /* Common marker colors (~36 entries from typical Touch/Stabilo/Crayola sets) */
   const STANDARD_MARKERS = [
@@ -396,6 +465,9 @@
       } else { $('advWrap').open = true; }
     };
   });
+  /* Sync advanced fields with the default preset (Standard) on load,
+     so generating without touching anything matches what the button says. */
+  applyPresetForShape(document.querySelector('#diffPick button.on'));
 
   $('imgInput').onchange = async (e) => {
     const files = Array.from(e.target.files || []).slice(0, 10);
@@ -449,6 +521,14 @@
     const s = $('status'); s.textContent = msg;
     s.classList.remove('err', 'ok');
     if (kind) s.classList.add(kind);
+  }
+
+  /* ---------- Geometry helpers (single source of truth for shape layout) ---------- */
+  function shapeYPitch(shape) {
+    return (shape === 'hexagon' || shape === 'circle') ? 0.86 : (shape === 'diamond' ? 0.5 : 1);
+  }
+  function shapeHasOffset(shape) {
+    return shape === 'hexagon' || shape === 'circle' || shape === 'diamond';
   }
 
   /* ---------- Color helpers ---------- */
@@ -717,7 +797,10 @@
     return { palette: result, remap };
   }
 
-  /* ---------- Cleanup: remove tiny same-color islands ---------- */
+  /* ---------- Cleanup: remove tiny same-color islands ----------
+     BFS uses an index pointer instead of queue.shift() — shift() is O(n)
+     per call, which made large regions (e.g. a 1000+ cell background)
+     quadratic. Pointer walk is linear. */
   function cleanupGrid(grid, threshold) {
     if (threshold < 1) return grid;
     const gh = grid.length, gw = grid[0].length;
@@ -730,8 +813,9 @@
         const cells = [];
         const queue = [[x, y]];
         visited[y][x] = true;
-        while (queue.length) {
-          const [cx, cy] = queue.shift();
+        let qi = 0;
+        while (qi < queue.length) {
+          const [cx, cy] = queue[qi++];
           cells.push([cx, cy]);
           const neighbors = [[cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]];
           for (const [nx, ny] of neighbors) {
@@ -811,27 +895,29 @@
   }
 
   /* KDP Standard 22-color palette mode:
-     Every pixel snaps directly to the nearest of the 22 fixed colors via
-     Lab Delta-E. Color numbers are stable across all images: Black=1, Gray=2,
-     ... Magenta=22. The output palette only includes colors actually used,
-     but their numbers remain their original (Black always shows as "1"). */
+     Every pixel snaps directly to the nearest of the fixed colors via
+     Lab Delta-E. Color numbers are stable across all images. The output
+     palette only includes colors actually used, but their labels remain
+     their original (Black always shows as "0"). */
   function kdpStandardPalette(samples) {
-    /* Lazy-compute Lab values for the 23 reference colors */
-    for (let i = 0; i < COLORQUEST_PALETTE.length; i++) {
-      if (!COLORQUEST_PALETTE_LAB[i]) {
-        const c = COLORQUEST_PALETTE[i].rgb;
-        COLORQUEST_PALETTE_LAB[i] = rgbToLab(c[0], c[1], c[2]);
-      }
-    }
+    const labRef = paletteLab();
     const labels = new Int32Array(samples.length);
-    /* Each sample → nearest of the 23 colors by Lab Delta-E */
+    /* Cache: RGB → nearest palette index. Cartoon sources have few unique
+       colors, so this avoids recomputing Lab + 24 distance checks per pixel. */
+    const cache = new Map();
     for (let i = 0; i < samples.length; i++) {
       const s = samples[i];
-      const sLab = rgbToLab(s[0], s[1], s[2]);
-      let bestI = 0, bestDE = Infinity;
-      for (let j = 0; j < COLORQUEST_PALETTE.length; j++) {
-        const de = deltaE(sLab, COLORQUEST_PALETTE_LAB[j]);
-        if (de < bestDE) { bestDE = de; bestI = j; }
+      const key = (s[0] << 16) | (s[1] << 8) | s[2];
+      let bestI = cache.get(key);
+      if (bestI === undefined) {
+        const sLab = rgbToLab(s[0], s[1], s[2]);
+        let bestDE = Infinity;
+        bestI = 0;
+        for (let j = 0; j < COLORQUEST_PALETTE.length; j++) {
+          const de = deltaE(sLab, labRef[j]);
+          if (de < bestDE) { bestDE = de; bestI = j; }
+        }
+        cache.set(key, bestI);
       }
       labels[i] = bestI;
     }
@@ -839,12 +925,7 @@
   }
 
   /* Build a hierarchical palette: pick BASE colors (very different hues),
-     then derive shades/tints from each base. Total palette size ≈ k.
-     Approach:
-      1. Run K-means with small k (numBases) to find base colors
-      2. For each base, generate shades (darker) and tints (lighter)
-      3. Allocate slots proportional to how many pixels each base covers
-      4. Snap each generated shade/tint to nearest standard marker */
+     then derive shades/tints from each base. Total palette size ≈ k. */
   function hierarchicalPalette(samples, k, anchors) {
     /* Decide how many BASE colors to extract (4-8 range) */
     const numBases = k <= 8 ? 4 : k <= 14 ? 5 : k <= 20 ? 6 : 8;
@@ -856,12 +937,19 @@
     const remaining = Math.max(0, k - numBases);
     const totalCount = baseLabels.length;
     const allocations = baseCounts.map(c => Math.round((c / totalCount) * remaining));
-    /* Adjust allocations to exactly equal `remaining` */
+    /* Adjust allocations to exactly equal `remaining`.
+       FIX: the original code did baseCounts.indexOf(max-of-ratio-array),
+       which searched for a ratio value inside the counts array — almost
+       always returning -1 and writing to allocations[-1]. Shade slots were
+       never actually distributed. Now we argmax the ratio properly. */
     let allocSum = allocations.reduce((a, b) => a + b, 0);
     while (allocSum < remaining) {
-      const idx = baseCounts.indexOf(Math.max(...baseCounts.map((c, i) =>
-        c / (allocations[i] + 1))));
-      allocations[idx]++;
+      let bestIdx = 0, bestRatio = -1;
+      for (let i = 0; i < numBases; i++) {
+        const ratio = baseCounts[i] / (allocations[i] + 1);
+        if (ratio > bestRatio) { bestRatio = ratio; bestIdx = i; }
+      }
+      allocations[bestIdx]++;
       allocSum++;
     }
     while (allocSum > remaining) {
@@ -938,53 +1026,74 @@
     return { centers: snapped, labels };
   }
 
-  /* ---------- ColorQuest (fixed-palette) dominant-color sampling ----------
-
-     For each grid cell, sample N×N pixels from the full-resolution source crop,
-     snap each pixel to the nearest ColorQuest palette color via Lab Delta-E,
-     then assign the MOST FREQUENT snapped color to the cell ("plurality vote").
-
-     This preserves dominant features (cartoon outlines, eye dots, accent colors)
-     that the previous "downsample then snap" path used to average away. */
-  function dominantColorGrid(img, gw, gh, shape) {
-    /* Physical geometry of the rendered grid depends on the cell shape:
-       - hex / circle / diamond render with offset rows (extra cell/2 width)
-       - hex / circle use yPitch ≈ 0.866 (close-packed rows)
-       - diamond uses yPitch = 0.5 (rhombic tessellation)
-       The cover-fit crop target aspect MUST match this physical aspect,
-       otherwise the sampled image is squashed/stretched vs the page.
-       Without this fix, diamond (yPitch 0.5 + offset) gets a 2× horizontal
-       stretch — head oversized, horn and stars cropped out. */
-    const yPitch = (shape === 'hexagon' || shape === 'circle') ? 0.86
-                 : (shape === 'diamond' ? 0.5 : 1);
-    const hasOffset = (shape === 'hexagon' || shape === 'circle' || shape === 'diamond');
+  /* Shape-aware cover-fit crop rect for a source image.
+     The crop target aspect MUST match the rendered grid's physical aspect
+     (offset rows add half a cell of width; hex/diamond rows are packed
+     tighter vertically), otherwise the image is squashed/stretched. */
+  function coverFitRect(img, gw, gh, shape) {
+    const yPitch = shapeYPitch(shape);
+    const hasOffset = shapeHasOffset(shape);
     const tar = (gw + (hasOffset ? 0.5 : 0)) / (gh * yPitch);
-
     const ar = img.width / img.height;
     let sx, sy, sw, sh;
     if (ar > tar) { sh = img.height; sw = sh * tar; sx = (img.width - sw)/2; sy = 0; }
     else { sw = img.width; sh = sw / tar; sx = 0; sy = (img.height - sh)/2; }
+    return { sx, sy, sw, sh, hasOffset, yPitch };
+  }
 
-    /* Draw the crop at FULL source resolution with smoothing OFF —
-       we want raw pixels, not browser interpolation. */
-    const cropW = Math.round(sw), cropH = Math.round(sh);
+  /* ---------- ColorQuest (fixed-palette) dominant-color sampling ----------
+
+     For each grid cell, sample N×N pixels from the source crop, snap each
+     pixel to the nearest ColorQuest palette color via Lab Delta-E, then
+     assign the MOST FREQUENT snapped color to the cell ("plurality vote").
+
+     This preserves dominant features (cartoon outlines, eye dots, accent
+     colors) that "downsample then snap" used to average away. */
+  function dominantColorGrid(img, gw, gh, shape) {
+    const { sx, sy, sw, sh, hasOffset } = coverFitRect(img, gw, gh, shape);
+
+    /* Cap the crop resolution. Full-res getImageData on a 6000px+ photo can
+       exhaust memory on mobile. 1600px on the long side keeps ~12+ source
+       pixels per cell at typical grid sizes — more than the 5×5 sampling
+       needs — while staying cheap. Smoothing stays OFF at 1:1 (raw pixels),
+       and turns ON only when we actually downscale, to avoid aliasing. */
+    const MAX_CROP = 1600;
+    let cropW = Math.round(sw), cropH = Math.round(sh);
+    const scale = Math.min(1, MAX_CROP / Math.max(cropW, cropH));
+    cropW = Math.max(1, Math.round(cropW * scale));
+    cropH = Math.max(1, Math.round(cropH * scale));
     const cropCanvas = document.createElement('canvas');
     cropCanvas.width = cropW; cropCanvas.height = cropH;
     const cctx = cropCanvas.getContext('2d');
-    cctx.imageSmoothingEnabled = false;
+    cctx.imageSmoothingEnabled = scale < 1;
+    if (scale < 1) cctx.imageSmoothingQuality = 'high';
     cctx.drawImage(img, sx, sy, sw, sh, 0, 0, cropW, cropH);
     const cropData = cctx.getImageData(0, 0, cropW, cropH).data;
 
-    /* Lazy-fill Lab values for the palette (Black, Gray, ... White) */
-    for (let i = 0; i < COLORQUEST_PALETTE.length; i++) {
-      if (!COLORQUEST_PALETTE_LAB[i]) {
-        const c = COLORQUEST_PALETTE[i].rgb;
-        COLORQUEST_PALETTE_LAB[i] = rgbToLab(c[0], c[1], c[2]);
+    const labRef = paletteLab();
+
+    /* Cache: packed RGB → nearest palette index. Cartoon/flat sources have
+       few unique colors; this turns ~50k Lab conversions + distance scans
+       into a handful of computations plus Map lookups. */
+    const nearestCache = new Map();
+    function nearestPaletteIdx(r, g, b) {
+      const key = (r << 16) | (g << 8) | b;
+      let idx = nearestCache.get(key);
+      if (idx === undefined) {
+        const sLab = rgbToLab(r, g, b);
+        let bestDE = Infinity;
+        idx = 0;
+        for (let j = 0; j < COLORQUEST_PALETTE.length; j++) {
+          const de = deltaE(sLab, labRef[j]);
+          if (de < bestDE) { bestDE = de; idx = j; }
+        }
+        nearestCache.set(key, idx);
       }
+      return idx;
     }
 
     /* Density of samples per cell: 5×5 is the recommended default — fast and
-       enough resolution for typical 26×72..38×57 grids on 1024×1536 sources. */
+       enough resolution for typical 26×72..38×57 grids. */
     const SAMPLE_N = 5;
     /* Effective horizontal cell pitch in the crop, accounting for the half-cell
        extra width that offset rows add. Per-cell sample x positions follow this
@@ -999,21 +1108,15 @@
         const px1 = ((gx + 1 + xOff) / denom) * cropW;
         const py0 = (gy / gh) * cropH;
         const py1 = ((gy + 1) / gh) * cropH;
-        /* Sample SAMPLE_N × SAMPLE_N pixels evenly inside this cell's source region.
-           Each sample is snapped independently to the nearest palette color. */
+        /* Sample SAMPLE_N × SAMPLE_N pixels evenly inside this cell's source
+           region. Each sample is snapped independently to the palette. */
         const counts = new Int32Array(COLORQUEST_PALETTE.length);
         for (let si = 0; si < SAMPLE_N; si++) {
           for (let sj = 0; sj < SAMPLE_N; sj++) {
             const px = Math.min(cropW - 1, Math.floor(px0 + ((si + 0.5) / SAMPLE_N) * (px1 - px0)));
             const py = Math.min(cropH - 1, Math.floor(py0 + ((sj + 0.5) / SAMPLE_N) * (py1 - py0)));
             const ii = (py * cropW + px) * 4;
-            const sLab = rgbToLab(cropData[ii], cropData[ii+1], cropData[ii+2]);
-            let bestI = 0, bestDE = Infinity;
-            for (let j = 0; j < COLORQUEST_PALETTE.length; j++) {
-              const de = deltaE(sLab, COLORQUEST_PALETTE_LAB[j]);
-              if (de < bestDE) { bestDE = de; bestI = j; }
-            }
-            counts[bestI]++;
+            counts[nearestPaletteIdx(cropData[ii], cropData[ii+1], cropData[ii+2])]++;
           }
         }
         /* Plurality vote — most frequent snapped color wins. */
@@ -1036,6 +1139,7 @@
   function enforceMaxColors(grid, maxColors) {
     const gh = grid.length, gw = grid[0].length;
     const whiteIdx = COLORQUEST_PALETTE.findIndex(c => c.name === 'White');
+    const labRef = paletteLab();
     /* Count cells per color */
     const counts = new Int32Array(COLORQUEST_PALETTE.length);
     for (let y = 0; y < gh; y++) {
@@ -1074,10 +1178,10 @@
         }
         if (best >= 0) { out[y][x] = best; continue; }
         /* Fallback: nearest active color in Lab space */
-        const sLab = COLORQUEST_PALETTE_LAB[grid[y][x]];
+        const sLab = labRef[grid[y][x]];
         let bestI = grid[y][x], bestDE = Infinity;
         for (const ki of kept) {
-          const de = deltaE(sLab, COLORQUEST_PALETTE_LAB[ki]);
+          const de = deltaE(sLab, labRef[ki]);
           if (de < bestDE) { bestDE = de; bestI = ki; }
         }
         out[y][x] = bestI;
@@ -1121,16 +1225,7 @@
       inter.width = interW; inter.height = interH;
       const ictx = inter.getContext('2d');
       ictx.imageSmoothingEnabled = true; ictx.imageSmoothingQuality = 'high';
-      /* Shape-aware cover-fit target so the crop's aspect matches the rendered
-         page (otherwise diamond gets ~2× horizontal stretch, hex/circle ~15%). */
-      const yPitch = (shape === 'hexagon' || shape === 'circle') ? 0.86
-                   : (shape === 'diamond' ? 0.5 : 1);
-      const hasOffset = (shape === 'hexagon' || shape === 'circle' || shape === 'diamond');
-      const ar = img.width / img.height;
-      const tar = (gw + (hasOffset ? 0.5 : 0)) / (gh * yPitch);
-      let sx, sy, sw, sh;
-      if (ar > tar) { sh = img.height; sw = sh * tar; sx = (img.width - sw)/2; sy = 0; }
-      else { sw = img.width; sh = sw / tar; sx = 0; sy = (img.height - sh)/2; }
+      const { sx, sy, sw, sh } = coverFitRect(img, gw, gh, shape);
       ictx.drawImage(img, sx, sy, sw, sh, 0, 0, interW, interH);
       let id = ictx.getImageData(0, 0, interW, interH);
       /* Legacy preprocessing: light sharpen only (no saturation/blur for KDP). */
@@ -1145,7 +1240,7 @@
       const samples = [];
       for (let i = 0; i < data.length; i += 4) samples.push([data[i], data[i+1], data[i+2]]);
 
-      /* Snap each pixel to nearest palette color via Lab distance (kdpStandardPalette).
+      /* Snap each pixel to nearest palette color via Lab distance.
          No K-means, no perceptual distance enforcement, no max-color limit. */
       const { labels } = kdpStandardPalette(samples);
       let grid = [];
@@ -1172,15 +1267,18 @@
       for (const idx of used) {
         if (counts[idx] / totalCells < 0.003) tooRare.add(idx);
       }
-      if (tooRare.size > 0) {
+      /* Safety: if every used color is "rare" (tiny grids), skip removal
+         instead of deleting the entire palette. */
+      if (tooRare.size > 0 && tooRare.size < used.size) {
+        const labRef = paletteLab();
         for (let y = 0; y < gh; y++) {
           for (let x = 0; x < gw; x++) {
             if (!tooRare.has(grid[y][x])) continue;
-            const sLab = COLORQUEST_PALETTE_LAB[grid[y][x]];
+            const sLab = labRef[grid[y][x]];
             let bestI = grid[y][x], bestDE = Infinity;
             for (let j = 0; j < COLORQUEST_PALETTE.length; j++) {
               if (tooRare.has(j)) continue;
-              const de = deltaE(sLab, COLORQUEST_PALETTE_LAB[j]);
+              const de = deltaE(sLab, labRef[j]);
               if (de < bestDE) { bestDE = de; bestI = j; }
             }
             grid[y][x] = bestI;
@@ -1202,15 +1300,7 @@
     inter.width = interW; inter.height = interH;
     const ictx = inter.getContext('2d');
     ictx.imageSmoothingEnabled = true; ictx.imageSmoothingQuality = 'high';
-    /* Shape-aware cover-fit target (same fix as KDP paths) */
-    const yPitch = (shape === 'hexagon' || shape === 'circle') ? 0.86
-                 : (shape === 'diamond' ? 0.5 : 1);
-    const hasOffset = (shape === 'hexagon' || shape === 'circle' || shape === 'diamond');
-    const ar = img.width / img.height;
-    const tar = (gw + (hasOffset ? 0.5 : 0)) / (gh * yPitch);
-    let sx, sy, sw, sh;
-    if (ar > tar) { sh = img.height; sw = sh * tar; sx = (img.width - sw)/2; sy = 0; }
-    else { sw = img.width; sh = sw / tar; sx = 0; sy = (img.height - sh)/2; }
+    const { sx, sy, sw, sh } = coverFitRect(img, gw, gh, shape);
     ictx.drawImage(img, sx, sy, sw, sh, 0, 0, interW, interH);
     let id = ictx.getImageData(0, 0, interW, interH);
     boostSaturation(id.data, 1.20);
@@ -1228,8 +1318,6 @@
     for (let i = 0; i < data.length; i += 4) samples.push([data[i], data[i+1], data[i+2]]);
     const anchors = findAnchors(samples);
     const effectiveK = Math.max(k, anchors.length + 2);
-
-    /* KDP mode handled in early-return path above (dominant-color sampling). */
 
     let centers, labels;
     if (palStyle === 'hierarchical') {
@@ -1320,12 +1408,12 @@
     const stroke = bg === '#fff' ? '#000' : '#fff';
     ctx.lineWidth = Math.max(0.5, cell * 0.04);
     const gh = grid.length, gw = grid[0].length;
-    const yPitch = (shape === 'hexagon' || shape === 'circle') ? 0.86 : (shape === 'diamond' ? 0.5 : 1);
+    const yPitch = shapeYPitch(shape);
     for (let y = 0; y < gh; y++) {
       for (let x = 0; x < gw; x++) {
         const v = grid[y][x];
         let cx, cy;
-        if (shape === 'hexagon' || shape === 'circle' || shape === 'diamond') {
+        if (shapeHasOffset(shape)) {
           /* Offset rows: every other row shifted by half a cell horizontally.
              For diamond (combined with yPitch=0.5) this gives proper rhombic
              tessellation where adjacent diamonds across rows share full edges. */
@@ -1333,7 +1421,7 @@
           cx = ox + x*cell + cell/2 + rowOffset;
           cy = oy + y*cell*yPitch + cell/2;
         } else {
-          /* Squares, circles, triangles: regular grid, no offset */
+          /* Squares, triangles: regular grid, no offset */
           cx = ox + x*cell + cell/2;
           cy = oy + y*cell + cell/2;
         }
@@ -1397,18 +1485,20 @@
           }
         } else {
           ctx.fillStyle = '#fff'; ctx.fill();
-          /* For squares, no stroke — cells are just white rectangles on bg */
           if (shape !== 'square') {
             ctx.strokeStyle = stroke; ctx.stroke();
+          } else if (bg === '#fff') {
+            /* FIX: on a white background, stroke-less white squares are
+               invisible. Add a faint outline so the template is usable;
+               the black-background Sunlife look is unchanged. */
+            ctx.strokeStyle = '#d4d4d4'; ctx.stroke();
           }
           let ny = cy;
           if (shape === 'triangle') {
             const up = (x + y) % 2 === 0;
             ny = cy + (up ? cell*0.05 : -cell*0.05);
           }
-          /* Consistent monospace font across ALL shapes (square included).
-             Single size multiplier so square, circle, triangle, hexagon all
-             render labels at the same visual weight. */
+          /* Consistent monospace font across ALL shapes (square included). */
           ctx.font = '400 ' + (fontPt * 1.2) + 'px ui-monospace, "JetBrains Mono", monospace';
           ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
           ctx.fillStyle = '#000';
@@ -1422,7 +1512,7 @@
   }
 
   function renderResultBlock(result, idx) {
-    const { grid, palette, gw, gh, name, paletteNames, usedSet, kdpMode } = result;
+    const { grid, palette, gw, gh, name, paletteNames, usedSet, kdpMode, shape } = result;
     const block = document.createElement('div'); block.className = 'page-block';
     const head = document.createElement('div'); head.className = 'page-head';
     const left = document.createElement('span'); left.className = 'nm';
@@ -1431,7 +1521,7 @@
     const right = document.createElement('div'); right.className = 'toggle-row';
     const meta = document.createElement('span'); meta.className = 'meta';
     const colorCount = kdpMode ? usedSet.size : palette.length;
-    meta.textContent = gw + '×' + gh + ' · ' + colorCount + ' colors' + (kdpMode ? ' · KDP 22' : '');
+    meta.textContent = gw + '×' + gh + ' · ' + colorCount + ' colors' + (kdpMode ? ' · KDP 22' : '') + ' · ' + shape;
     right.appendChild(meta);
     const tplBtn = document.createElement('button'); tplBtn.className = 'toggle on'; tplBtn.textContent = 'Template';
     const fillBtn = document.createElement('button'); fillBtn.className = 'toggle'; fillBtn.textContent = 'Filled';
@@ -1442,10 +1532,13 @@
     block.appendChild(stage);
     const renderMode = (mode) => {
       stage.innerHTML = '';
+      /* FIX: always render with the shape the grid was GENERATED with
+         (result.shape), not the currently selected state.shape — otherwise
+         changing the shape after generating distorts existing pages. */
       const cellPx = Math.max(7, Math.min(14, Math.floor(640 / gw)));
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const yPitch = (state.shape === 'hexagon' || state.shape === 'circle') ? 0.86 : (state.shape === 'diamond' ? 0.5 : 1);
-      const W = gw * cellPx + 20 + ((state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') ? cellPx/2 : 0);
+      const yPitch = shapeYPitch(shape);
+      const W = gw * cellPx + 20 + (shapeHasOffset(shape) ? cellPx/2 : 0);
       const H = Math.ceil(gh * cellPx * yPitch) + 20;
       const c = document.createElement('canvas');
       c.width = W * dpr; c.height = H * dpr;
@@ -1456,7 +1549,7 @@
       ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
       const fontPt = Math.max(4, Math.floor(cellPx * 0.50));
       const labels = kdpMode ? COLORQUEST_PALETTE.map(c => c.label) : null;
-      drawGrid(ctx, grid, palette, 10, 10, cellPx, state.shape, bg, fontPt, mode, labels);
+      drawGrid(ctx, grid, palette, 10, 10, cellPx, shape, bg, fontPt, mode, labels);
       stage.appendChild(c);
     };
     tplBtn.onclick = () => { tplBtn.classList.add('on'); fillBtn.classList.remove('on'); renderMode('template'); };
@@ -1561,6 +1654,7 @@
     $('pdfBtn').disabled = true;
     $('pngBtn').disabled = true;
     $('pngFilledBtn').disabled = true;
+    $('siteExportBtn').disabled = true;
     $('progress').style.display = '';
     $('progressBar').style.width = '0%';
     setStatus('Generating ' + count + ' page(s)...');
@@ -1575,7 +1669,9 @@
         } else {
           res = gridManual($('manualPattern').value, gw, gh, k);
         }
-        const result = { ...res, gw, gh, name };
+        /* FIX: snapshot the shape into the result. Render/PNG/PDF must use
+           the shape the grid was sampled for, not whatever is selected later. */
+        const result = { ...res, gw, gh, name, shape: state.shape };
         state.results.push(result);
         $('pages').appendChild(renderResultBlock(result, i));
         $('progressBar').style.width = (((i+1)/count)*100) + '%';
@@ -1584,6 +1680,8 @@
       $('pdfBtn').disabled = false;
       $('pngBtn').disabled = false;
       $('pngFilledBtn').disabled = false;
+      $('siteExportBtn').disabled = false;
+      $('seHint').textContent = 'Ready. Exports page 1 (' + state.results[0].gw + '×' + state.results[0].gh + ', ' + state.results[0].shape + ').';
       setStatus('Done. ' + count + ' page(s) ready. Tap "Filled" on any page to preview colors.', 'ok');
       setTimeout(() => { $('progress').style.display = 'none'; }, 1200);
     } catch (e) {
@@ -1620,6 +1718,13 @@
       const r = cell * 0.44;
       const rad = r * 0.22;
       doc.roundedRect(cx - r, cy - r, r*2, r*2, rad, rad, style);
+    } else if (shape === 'diamond') {
+      /* FIX: diamond was missing entirely — diamond PDFs rendered only the
+         number labels with no cells. Plain rhombus (rounded corners are not
+         worth the path complexity at print scale). Matches canvas r=0.42. */
+      const r = cell * 0.42;
+      const pts = [[cx, cy - r], [cx + r, cy], [cx, cy + r], [cx - r, cy]];
+      polygonPdf(doc, pts, style);
     }
   }
   const PAGE_SIZES = {
@@ -1627,23 +1732,31 @@
     '6x9': [152.4, 228.6], '7x10': [177.8, 254], '8.5x11': [215.9, 279.4]
   };
 
-  function renderPagePdf(doc, result, isFirst) {
-    const { grid, palette } = result;
+  function renderPagePdf(doc, result, isFirst, pageNum) {
+    const { grid, palette, shape } = result;
     const gh = grid.length, gw = grid[0].length;
     const [pw, ph] = PAGE_SIZES[$('pageSize').value];
     const isWhite = $('bgMode').value === 'white';
     if (!isFirst) doc.addPage([pw, ph], 'portrait');
     doc.setFillColor(isWhite ? 255 : 0, isWhite ? 255 : 0, isWhite ? 255 : 0);
     doc.rect(0, 0, pw, ph, 'F');
-    const margin = Math.min(10, pw * 0.05);
+    /* KDP mirrored margins for 151–300 page books:
+       gutter (inside) 0.5" = 12.7mm, outside 0.375" = 9.5mm, top/bottom 9.5mm.
+       Odd pages (1,3,5…) are recto → gutter on the LEFT; even → RIGHT. */
+    const GUTTER = 12.7, OUTER = 9.5;
+    const isOdd = (pageNum % 2) === 1;
+    const mLeft  = isOdd ? GUTTER : OUTER;
+    const mRight = isOdd ? OUTER : GUTTER;
+    const margin = OUTER; /* top/bottom */
     /* No legend on PDF — color list is shown in UI for copying. Use full page for grid. */
-    const availW = pw - margin*2;
+    const availW = pw - mLeft - mRight;
     const availH = ph - margin*2;
-    const yPitch = (state.shape === 'hexagon' || state.shape === 'circle') ? 0.86 : (state.shape === 'diamond' ? 0.5 : 1);
+    const yPitch = shapeYPitch(shape);
+    const hasOffset = shapeHasOffset(shape);
     const cell = Math.min(availW / gw, availH / (gh * yPitch));
-    const totalGridW = gw*cell + ((state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') ? cell*0.5 : 0);
+    const totalGridW = gw*cell + (hasOffset ? cell*0.5 : 0);
     const totalGridH = gh*cell*yPitch;
-    const ox = margin + (availW - totalGridW) / 2;
+    const ox = mLeft + (availW - totalGridW) / 2;
     const oy = margin + (availH - totalGridH) / 2;
     const fontPt = Math.max(4, Math.min(18, cell * 2.835 * 0.55));
     doc.setFont('helvetica', 'normal');
@@ -1652,10 +1765,17 @@
     doc.setLineWidth(0.08);
     doc.setFillColor(255, 255, 255);
     doc.setTextColor(0, 0, 0);
+    /* Squares are normally stroke-less filled rectangles — Sunlife style —
+       but on a white page that makes them invisible, so add a light outline. */
+    let cellStyle;
+    if (shape === 'square') {
+      if (isWhite) { doc.setDrawColor(212, 212, 212); cellStyle = 'FD'; }
+      else cellStyle = 'F';
+    } else cellStyle = 'FD';
     for (let y = 0; y < gh; y++) {
       for (let x = 0; x < gw; x++) {
         let cx, cy;
-        if (state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') {
+        if (hasOffset) {
           const rowOffset = (y % 2) * cell * 0.5;
           cx = ox + x*cell + cell/2 + rowOffset;
           cy = oy + y*cell*yPitch + cell/2;
@@ -1663,17 +1783,14 @@
           cx = ox + x*cell + cell/2;
           cy = oy + y*cell + cell/2;
         }
-        /* Squares are stroke-less filled rectangles — Sunlife style.
-           Other shapes get an outline for clarity. */
-        const cellStyle = state.shape === 'square' ? 'F' : 'FD';
-        drawCellPdf(doc, state.shape, x, y, cx, cy, cell, cellStyle);
+        drawCellPdf(doc, shape, x, y, cx, cy, cell, cellStyle);
       }
     }
     for (let y = 0; y < gh; y++) {
       for (let x = 0; x < gw; x++) {
         const v = grid[y][x];
         let cx, cy;
-        if (state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') {
+        if (hasOffset) {
           const rowOffset = (y % 2) * cell * 0.5;
           cx = ox + x*cell + cell/2 + rowOffset;
           cy = oy + y*cell*yPitch + cell/2;
@@ -1682,12 +1799,10 @@
           cy = oy + y*cell + cell/2;
         }
         let ny = cy;
-        if (state.shape === 'triangle') {
+        if (shape === 'triangle') {
           const up = (x + y) % 2 === 0;
           ny = cy + (up ? cell*0.05 : -cell*0.05);
         }
-        /* In KDP mode use single-char label (0-9, A-M); else use 1-indexed number.
-           Empty label (White) → leave cell blank. */
         /* In KDP mode use single-char label (0-9, A-M); else use 1-indexed number.
            Empty label (White) → leave cell blank. */
         const text = result.kdpMode ? COLORQUEST_PALETTE[v].label : String(v + 1);
@@ -1714,10 +1829,10 @@
     const doc = new jsPDF({ unit: 'mm', format: [pw, ph], orientation: 'portrait', compress: true });
     setStatus('Building PDF...');
     await sleep(20);
-    state.results.forEach((r, i) => renderPagePdf(doc, r, i === 0));
+    state.results.forEach((r, i) => renderPagePdf(doc, r, i === 0, i + 1));
     const fname = state.results.length > 1
-      ? 'colorquest-' + state.results.length + 'pages-' + state.shape + '.pdf'
-      : 'colorquest-' + state.results[0].gw + 'x' + state.results[0].gh + '-' + state.shape + '.pdf';
+      ? 'colorquest-' + state.results.length + 'pages-' + state.results[0].shape + '.pdf'
+      : 'colorquest-' + state.results[0].gw + 'x' + state.results[0].gh + '-' + state.results[0].shape + '.pdf';
     const dataURL = doc.output('datauristring');
     $('dlOut').innerHTML = '';
     showDownloadLink(dataURL, fname, '📄 Open PDF');
@@ -1726,24 +1841,22 @@
 
   function renderPagePng(result, mode) {
     mode = mode || 'template';
-    const { grid, palette } = result;
+    const { grid, palette, shape } = result;
     const gh = grid.length, gw = grid[0].length;
-    /* PNG has NO legend — the color list is shown separately in the UI for copying.
-       This gives the cleanest output for adult coloring book use. */
+    /* PNG has NO legend — the color list is shown separately in the UI for copying. */
     const BASE = 50;
     const PAD = 40;
     let CELL, yPitch, W, H;
-    if (state.shape === 'hexagon' || state.shape === 'circle') {
-      /* Adjust hex cell size so canvas dims match a square grid of BASE=50. */
-      const cellByW = (gw * BASE) / (gw + 0.5);
-      const cellByH = BASE / 0.86;
-      CELL = Math.min(cellByW, cellByH);
+    if (shape === 'hexagon' || shape === 'circle') {
+      /* FIX: canvas was sized for a square grid (gh*BASE) while hex-packed
+         rows only occupy gh*CELL*0.86 — leaving thick dead bands top/bottom.
+         Size the canvas to the ACTUAL drawn grid instead. */
+      CELL = BASE;
       yPitch = 0.86;
-      W = gw * BASE + PAD * 2;
-      H = gh * BASE + PAD * 2;
-    } else if (state.shape === 'diamond') {
-      /* Diamond uses yPitch=0.5 + offset rows for rhombic tessellation.
-         Canvas height is halved (50 rows render as 25 cells of visual height). */
+      W = gw * CELL + CELL/2 + PAD * 2;
+      H = Math.ceil(gh * CELL * yPitch) + PAD * 2;
+    } else if (shape === 'diamond') {
+      /* Diamond uses yPitch=0.5 + offset rows for rhombic tessellation. */
       CELL = BASE;
       yPitch = 0.5;
       W = gw * CELL + CELL/2 + PAD * 2;
@@ -1763,17 +1876,14 @@
     const fontPt = Math.floor(CELL * 0.42);
     const labels = result.kdpMode ? COLORQUEST_PALETTE.map(c => c.label) : null;
     /* Center the offset-row grid (hex, circle, diamond) inside the canvas */
-    let drawOx = PAD;
-    if (state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') {
+    let drawOx = PAD, drawOy = PAD;
+    if (shapeHasOffset(shape)) {
       const drawnW = gw * CELL + CELL/2;
       drawOx = (W - drawnW) / 2;
-    }
-    let drawOy = PAD;
-    if (state.shape === 'hexagon' || state.shape === 'circle' || state.shape === 'diamond') {
       const drawnH = gh * CELL * yPitch;
       drawOy = PAD + (H - PAD*2 - drawnH) / 2;
     }
-    drawGrid(ctx, grid, palette, drawOx, drawOy, CELL, state.shape, isWhite ? '#fff' : '#000', fontPt, mode, labels);
+    drawGrid(ctx, grid, palette, drawOx, drawOy, CELL, shape, isWhite ? '#fff' : '#000', fontPt, mode, labels);
     return c;
   }
 
@@ -1786,8 +1896,8 @@
       const c = renderPagePng(r, 'template');
       const dataURL = c.toDataURL('image/png');
       const fname = (state.results.length > 1)
-        ? 'colorquest-page' + (i+1) + '-' + r.gw + 'x' + r.gh + '-' + state.shape + '.png'
-        : 'colorquest-' + r.gw + 'x' + r.gh + '-' + state.shape + '.png';
+        ? 'colorquest-page' + (i+1) + '-' + r.gw + 'x' + r.gh + '-' + r.shape + '.png'
+        : 'colorquest-' + r.gw + 'x' + r.gh + '-' + r.shape + '.png';
       const label = state.results.length > 1 ? '🖼 Open PNG (page ' + (i+1) + ')' : '🖼 Open PNG';
       showDownloadLink(dataURL, fname, label);
     });
@@ -1803,12 +1913,161 @@
       const c = renderPagePng(r, 'filled');
       const dataURL = c.toDataURL('image/png');
       const fname = (state.results.length > 1)
-        ? 'colorquest-page' + (i+1) + '-' + r.gw + 'x' + r.gh + '-' + state.shape + '-filled.png'
-        : 'colorquest-' + r.gw + 'x' + r.gh + '-' + state.shape + '-filled.png';
+        ? 'colorquest-page' + (i+1) + '-' + r.gw + 'x' + r.gh + '-' + r.shape + '-filled.png'
+        : 'colorquest-' + r.gw + 'x' + r.gh + '-' + r.shape + '-filled.png';
       const label = state.results.length > 1 ? '🎨 Open filled PNG (page ' + (i+1) + ')' : '🎨 Open filled PNG';
       showDownloadLink(dataURL, fname, label);
     });
     setStatus(state.results.length + ' filled PNG' + (state.results.length>1?'s':'') + ' ready.', 'ok');
+  };
+
+  /* ──────────────────────────────────────────────────────────────
+     EXPORT FOR SITE — bundles page 1 into one ZIP for the mini-website:
+       <slug>/meta.json   + preview.png (filled + legend) + page.pdf
+     ────────────────────────────────────────────────────────────── */
+  function slugify(s) {
+    return (s || '').toString()
+      .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\w\s-]/g, '').trim().toLowerCase()
+      .replace(/[\s_]+/g, '-').replace(/-+/g, '-');
+  }
+
+  /* Build a website-ready preview: the filled grid on white, with a brand
+     line on top and a numbered color legend strip on the bottom — so the
+     card matches Pixelcolorist's "legend beside the art" convention. */
+  function buildSitePreview(result) {
+    const BRAND = 'PIXEL MYSTERY QUEST  ·  FREE PRINTABLE';   // ← change to your brand
+    const INK = '#1f2a44', DIM = '#94a0b4', LINE = '#cbd5e2';
+
+    /* reuse ColorQuest's own filled renderer → identical geometry per shape */
+    const art = renderPagePng(result, 'filled');
+
+    /* which palette indices are actually used (for the legend) */
+    const grid = result.grid;
+    const used = [];
+    const seen = new Set();
+    for (let y = 0; y < grid.length; y++)
+      for (let x = 0; x < grid[0].length; x++) {
+        const idx = grid[y][x];
+        if (!seen.has(idx)) { seen.add(idx); used.push(idx); }
+      }
+    /* white (label '') is "no color" — skip it in the legend */
+    const legendIdx = used.filter(i => {
+      const p = result.palette[i];
+      return !(p[0] === 255 && p[1] === 255 && p[2] === 255);
+    });
+
+    const TOP = 70, BOTTOM_PAD = 26, SW = 34, GAP = 20, PER_ROW = 10, ROW_H = 56;
+    const legendRows = Math.max(1, Math.ceil(legendIdx.length / PER_ROW));
+    const legendH = legendRows * ROW_H + BOTTOM_PAD;
+
+    /* fit the art into a fixed-width card, letter-ish ratio */
+    const CARD_W = 1000;
+    const scale = (CARD_W - 80) / art.width;
+    const artW = art.width * scale, artH = art.height * scale;
+    const CARD_H = Math.round(TOP + artH + 30 + legendH);
+
+    const c = document.createElement('canvas');
+    c.width = CARD_W; c.height = CARD_H;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, CARD_W, CARD_H);
+
+    /* brand line */
+    ctx.fillStyle = DIM;
+    ctx.font = '700 22px "JetBrains Mono", monospace';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(BRAND, 40, 38);
+
+    /* the art */
+    ctx.drawImage(art, 40, TOP, artW, artH);
+
+    /* legend swatches with numbers */
+    const labels = COLORQUEST_PALETTE.map(p => p.label);
+    let lx = 40, ly = TOP + artH + 30;
+    ctx.font = '700 20px "JetBrains Mono", monospace';
+    ctx.textBaseline = 'alphabetic';
+    legendIdx.forEach((idx, i) => {
+      const col = i % PER_ROW;
+      const x = 40 + col * (SW + GAP + 22);
+      const y = ly + Math.floor(i / PER_ROW) * ROW_H;
+      const [r, g, b] = result.palette[idx];
+      ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+      ctx.fillRect(x, y, SW, SW);
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.5;
+      ctx.strokeRect(x, y, SW, SW);
+      ctx.fillStyle = INK;
+      ctx.fillText(labels[idx] || '·', x + SW + 7, y + SW - 9);
+    });
+
+    return c;
+  }
+
+  /* Build a one-page PDF (just this result) using the existing page renderer */
+  function buildSinglePagePdf(result) {
+    const { jsPDF } = window.jspdf;
+    const [pw, ph] = PAGE_SIZES[$('pageSize').value];
+    const doc = new jsPDF({ unit: 'mm', format: [pw, ph], orientation: 'portrait', compress: true });
+    renderPagePdf(doc, result, true, 1);
+    return doc.output('blob');
+  }
+
+  $('siteExportBtn').onclick = async () => {
+    if (state.results.length === 0) return;
+    if (!window.JSZip) { setStatus('ZIP library still loading.', 'err'); return; }
+    if (!window.jspdf) { setStatus('PDF library still loading.', 'err'); return; }
+
+    const title = ($('seTitle').value || '').trim();
+    const category = ($('seCategory').value || '').trim();
+    if (!title) { setStatus('Add a title for the site export.', 'err'); $('seTitle').focus(); return; }
+    if (!category) { setStatus('Add a category for the site export.', 'err'); $('seCategory').focus(); return; }
+
+    setStatus('Building site ZIP...');
+    await sleep(20);
+
+    const result = state.results[0];
+    const slug = slugify(title);
+
+    /* count colors actually used (excluding pure white) */
+    const grid = result.grid, seen = new Set();
+    for (let y = 0; y < grid.length; y++)
+      for (let x = 0; x < grid[0].length; x++) seen.add(grid[y][x]);
+    const colorCount = [...seen].filter(i => {
+      const p = result.palette[i];
+      return !(p[0] === 255 && p[1] === 255 && p[2] === 255);
+    }).length;
+
+    const meta = {
+      title: title,
+      category: slugify(category),
+      tags: ($('seTags').value || '').split(',').map(t => slugify(t)).filter(Boolean),
+      difficulty: $('seDifficulty').value,
+      gridSize: result.gw + '×' + result.gh,
+      colors: colorCount,
+      description: ($('seDescription').value || '').trim(),
+      featured: $('seFeatured').checked,
+    };
+
+    /* preview.png */
+    const previewCanvas = buildSitePreview(result);
+    const previewBlob = await new Promise(res => previewCanvas.toBlob(res, 'image/png'));
+
+    /* page.pdf */
+    const pdfBlob = buildSinglePagePdf(result);
+
+    /* zip it: files live under <slug>/ so the site's add-puzzle reads cleanly */
+    const zip = new JSZip();
+    const folder = zip.folder(slug);
+    folder.file('meta.json', JSON.stringify(meta, null, 2) + '\n');
+    folder.file('preview.png', previewBlob);
+    folder.file('page.pdf', pdfBlob);
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(zipBlob);
+
+    $('dlOut').innerHTML = '';
+    showDownloadLink(url, slug + '.zip', '📦 Download site ZIP');
+    setStatus('Site ZIP ready: ' + slug + '.zip → npm run add -- ./' + slug + '.zip', 'ok');
   };
 })();
 </script>
