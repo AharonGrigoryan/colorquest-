@@ -263,6 +263,7 @@
         <button class="btn-ghost" id="pdfBtn" disabled>Build PDF</button>
         <button class="btn-ghost" id="pngBtn" disabled>Build PNG</button>
         <button class="btn-ghost" id="pngFilledBtn" disabled>Build PNG (Filled)</button>
+        <button class="btn-ghost" id="pngBothBtn" disabled>Build PNG (Blank + Filled)</button>
       </div>
 
       <!-- ── Export for site (mini-website conveyor) ───────────────── -->
@@ -1654,6 +1655,7 @@
     $('pdfBtn').disabled = true;
     $('pngBtn').disabled = true;
     $('pngFilledBtn').disabled = true;
+    $('pngBothBtn').disabled = true;
     $('siteExportBtn').disabled = true;
     $('progress').style.display = '';
     $('progressBar').style.width = '0%';
@@ -1680,6 +1682,7 @@
       $('pdfBtn').disabled = false;
       $('pngBtn').disabled = false;
       $('pngFilledBtn').disabled = false;
+      $('pngBothBtn').disabled = false;
       $('siteExportBtn').disabled = false;
       $('seHint').textContent = 'Ready. Exports page 1 (' + state.results[0].gw + '×' + state.results[0].gh + ', ' + state.results[0].shape + ').';
       setStatus('Done. ' + count + ' page(s) ready. Tap "Filled" on any page to preview colors.', 'ok');
@@ -1919,6 +1922,48 @@
       showDownloadLink(dataURL, fname, label);
     });
     setStatus(state.results.length + ' filled PNG' + (state.results.length>1?'s':'') + ' ready.', 'ok');
+  };
+
+  /* ──────────────────────────────────────────────────────────────
+     BUILD PNG (BLANK + FILLED) — one ZIP with both versions of every
+     page. Filenames carry the cell shape, e.g.
+       colorquest-page1-38x57-circle-blank.png
+       colorquest-page1-38x57-circle-filled.png
+     ────────────────────────────────────────────────────────────── */
+  function canvasToBlob(canvas) {
+    return new Promise(res => canvas.toBlob(res, 'image/png'));
+  }
+
+  $('pngBothBtn').onclick = async () => {
+    if (state.results.length === 0) return;
+    if (!window.JSZip) { setStatus('ZIP library still loading.', 'err'); return; }
+
+    setStatus('Building blank + filled PNGs...');
+    await sleep(20);
+    $('dlOut').innerHTML = '';
+
+    const single = state.results.length === 1;
+    const zip = new JSZip();
+
+    for (let i = 0; i < state.results.length; i++) {
+      const r = state.results[i];
+      const base = 'colorquest-' + (single ? '' : 'page' + (i + 1) + '-')
+                 + r.gw + 'x' + r.gh + '-' + r.shape;
+
+      const blankBlob = await canvasToBlob(renderPagePng(r, 'template'));
+      const filledBlob = await canvasToBlob(renderPagePng(r, 'filled'));
+
+      zip.file(base + '-blank.png', blankBlob);
+      zip.file(base + '-filled.png', filledBlob);
+    }
+
+    const shapeTag = single ? state.results[0].shape : 'mixed';
+    const zipName = 'colorquest-' + shapeTag + '-blank+filled.zip';
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    showDownloadLink(URL.createObjectURL(zipBlob), zipName, '🗂 Download ' + zipName);
+
+    const pageCount = state.results.length;
+    setStatus(pageCount + ' page' + (pageCount > 1 ? 's' : '') + ' × 2 (blank + filled) zipped → ' + zipName, 'ok');
   };
 
   /* ──────────────────────────────────────────────────────────────
