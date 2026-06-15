@@ -1858,8 +1858,18 @@
     const { grid, palette, shape } = result;
     const gh = grid.length, gw = grid[0].length;
     /* PNG has NO legend — the color list is shown separately in the UI for copying. */
-    const BASE = 50;
-    const PAD = 40;
+    /* Print quality: 100px/cell ≈ 300 DPI when printed at typical KDP sizes,
+       so numbers and cell edges stay crisp (no pixelation) on paper. A safety
+       cap keeps the canvas under the browser's max dimension for huge grids. */
+    const QUALITY = 2;                 // 1 = screen (50px/cell), 2 = print (100px/cell)
+    const MAX_CANVAS_PX = 14000;       // stay well under browser canvas limits
+    let BASE = 50 * QUALITY;
+    /* If the grid is so large that BASE would overflow the canvas, scale BASE
+       down to fit — still far sharper than the old 50px baseline. */
+    const longCells = Math.max(gw, gh);
+    const estLongPx = longCells * BASE + 80 * QUALITY;
+    if (estLongPx > MAX_CANVAS_PX) BASE = Math.floor((MAX_CANVAS_PX - 80 * QUALITY) / longCells);
+    const PAD = 40 * QUALITY;
     let CELL, yPitch, W, H;
     if (shape === 'hexagon' || shape === 'circle') {
       /* FIX: canvas was sized for a square grid (gh*BASE) while hex-packed
@@ -1884,6 +1894,8 @@
     const c = document.createElement('canvas');
     c.width = W; c.height = H;
     const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     const isWhite = $('bgMode').value === 'white';
     ctx.fillStyle = isWhite ? '#fff' : '#000';
     ctx.fillRect(0, 0, W, H);
