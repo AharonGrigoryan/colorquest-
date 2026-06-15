@@ -1499,8 +1499,13 @@
             const up = (x + y) % 2 === 0;
             ny = cy + (up ? cell*0.05 : -cell*0.05);
           }
-          /* Consistent monospace font across ALL shapes (square included). */
-          ctx.font = '400 ' + (fontPt * 1.2) + 'px ui-monospace, "JetBrains Mono", monospace';
+          /* Consistent monospace font across shapes, scaled to each shape's
+             usable interior. A diamond's number sits inside a narrow rhombus
+             (~half the area of a square), so the same point size reads larger
+             and bolder. Shrink diamond text so it visually matches the circle
+             and hexagon numbers. */
+          const fontScale = shape === 'diamond' ? 0.62 : 1;
+          ctx.font = '400 ' + (fontPt * 1.2 * fontScale) + 'px ui-monospace, "JetBrains Mono", monospace';
           ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
           ctx.fillStyle = '#000';
           /* In KDP mode, use single-char label (0-9, A-M); else use number.
@@ -1807,9 +1812,15 @@
           ny = cy + (up ? cell*0.05 : -cell*0.05);
         }
         /* In KDP mode use single-char label (0-9, A-M); else use 1-indexed number.
-           Empty label (White) → leave cell blank. */
+           Empty label (White) → leave cell blank.
+           Diamonds have a narrow interior, so their numbers read larger/bolder
+           at the same point size — shrink them to match circle/hexagon. */
         const text = result.kdpMode ? COLORQUEST_PALETTE[v].label : String(v + 1);
-        if (text !== '') doc.text(text, cx, ny, { align: 'center', baseline: 'middle' });
+        if (text !== '') {
+          if (shape === 'diamond') doc.setFontSize(fontPt * 0.62);
+          doc.text(text, cx, ny, { align: 'center', baseline: 'middle' });
+          if (shape === 'diamond') doc.setFontSize(fontPt);
+        }
       }
     }
     /* No legend on PDF — color list is in the UI for copying. */
