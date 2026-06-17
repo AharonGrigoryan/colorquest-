@@ -1957,6 +1957,110 @@
     return new Promise(res => canvas.toBlob(res, 'image/png'));
   }
 
+  /* ──────────────────────────────────────────────────────────────
+     LEGEND SHEET — an UNCOLORED key: each used color drawn as an
+     outlined swatch in the puzzle's ACTUAL shape (circle/square/
+     hexagon/diamond/triangle), with its symbol inside and the color
+     NAME beside it. White background, black lines — matches the
+     printable legend page so you can tell puzzles apart at a glance.
+     ────────────────────────────────────────────────────────────── */
+  function buildLegendSheet(result) {
+    const { grid, palette, shape } = result;
+    const labels = COLORQUEST_PALETTE.map(c => c.label);
+    const names  = COLORQUEST_PALETTE.map(c => c.name);
+
+    /* which palette indices are actually used, in palette order */
+    const used = [];
+    const seen = new Set();
+    for (let y = 0; y < grid.length; y++)
+      for (let x = 0; x < grid[0].length; x++) {
+        const v = grid[y][x];
+        if (!seen.has(v)) { seen.add(v); }
+      }
+    COLORQUEST_PALETTE.forEach((_, i) => { if (seen.has(i)) used.push(i); });
+
+    const Q = 2;                       // print quality
+    const SW = 64 * Q;                 // swatch box size
+    const ROW = 92 * Q;                // row height
+    const PADX = 70 * Q, PADTOP = 70 * Q;
+    const TEXT_X = PADX + SW + 26 * Q;  // where the name starts
+    const W = 720 * Q;
+    const H = PADTOP * 2 + used.length * ROW;
+
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+
+    /* header */
+    ctx.fillStyle = '#000';
+    ctx.font = '700 ' + (22 * Q) + 'px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('COLOR KEY · ' + shape.toUpperCase() + ' · ' + used.length + ' colors',
+                 PADX, PADTOP - 24 * Q);
+
+    ctx.lineWidth = Math.max(1.2, 2 * Q);
+    ctx.strokeStyle = '#000';
+
+    used.forEach((idx, i) => {
+      const cy = PADTOP + i * ROW + SW / 2;
+      const cx = PADX + SW / 2;
+      const cell = SW;            // reuse shape geometry sized to the swatch
+
+      /* draw the outlined shape (no fill) using the same path math as the grid */
+      ctx.beginPath();
+      if (shape === 'circle') {
+        ctx.arc(cx, cy, cell * 0.46, 0, Math.PI * 2);
+      } else if (shape === 'hexagon') {
+        const r = cell * 0.52;
+        for (let k = 0; k < 6; k++) {
+          const a = Math.PI / 3 * k + Math.PI / 6;
+          const px = cx + Math.cos(a) * r * 0.95, py = cy + Math.sin(a) * r * 0.95;
+          if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+      } else if (shape === 'triangle') {
+        const r = cell * 0.62;
+        ctx.moveTo(cx, cy - r * 0.95); ctx.lineTo(cx + r, cy + r * 0.55); ctx.lineTo(cx - r, cy + r * 0.55);
+        ctx.closePath();
+      } else if (shape === 'diamond') {
+        const r = cell * 0.46;
+        ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy); ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r, cy);
+        ctx.closePath();
+      } else { /* square */
+        const r = cell * 0.46, rad = r * 0.22, x0 = cx - r, y0 = cy - r, sz = r * 2;
+        ctx.moveTo(x0 + rad, y0);
+        ctx.lineTo(x0 + sz - rad, y0); ctx.quadraticCurveTo(x0 + sz, y0, x0 + sz, y0 + rad);
+        ctx.lineTo(x0 + sz, y0 + sz - rad); ctx.quadraticCurveTo(x0 + sz, y0 + sz, x0 + sz - rad, y0 + sz);
+        ctx.lineTo(x0 + rad, y0 + sz); ctx.quadraticCurveTo(x0, y0 + sz, x0, y0 + sz - rad);
+        ctx.lineTo(x0, y0 + rad); ctx.quadraticCurveTo(x0, y0, x0 + rad, y0);
+        ctx.closePath();
+      }
+      ctx.stroke();
+
+      /* symbol inside the swatch */
+      ctx.fillStyle = '#000';
+      const fs = shape === 'diamond' ? SW * 0.32 : SW * 0.42;
+      ctx.font = '400 ' + fs + 'px "JetBrains Mono", ui-monospace, monospace';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(labels[idx], cx, cy);
+
+      /* color name beside it */
+      ctx.textAlign = 'left';
+      ctx.font = '400 ' + (26 * Q) + 'px "JetBrains Mono", ui-monospace, monospace';
+      ctx.fillText(names[idx], TEXT_X, cy);
+    });
+
+    return c;
+  }
+
+  function legendFileName(result, single, i) {
+    const base = 'colorquest-' + (single ? '' : 'page' + (i + 1) + '-')
+               + result.gw + 'x' + result.gh + '-' + result.shape;
+    return base + '-KEY.png';
+  }
+
   $('pngBothBtn').onclick = async () => {
     if (state.results.length === 0) return;
     if (!window.JSZip) { setStatus('ZIP library still loading.', 'err'); return; }
@@ -1975,9 +2079,11 @@
 
       const blankBlob = await canvasToBlob(renderPagePng(r, 'template'));
       const filledBlob = await canvasToBlob(renderPagePng(r, 'filled'));
+      const keyBlob = await canvasToBlob(buildLegendSheet(r));
 
       zip.file(base + '-blank.png', blankBlob);
       zip.file(base + '-filled.png', filledBlob);
+      zip.file(base + '-KEY.png', keyBlob);
     }
 
     const shapeTag = single ? state.results[0].shape : 'mixed';
@@ -1986,7 +2092,7 @@
     showDownloadLink(URL.createObjectURL(zipBlob), zipName, '🗂 Download ' + zipName);
 
     const pageCount = state.results.length;
-    setStatus(pageCount + ' page' + (pageCount > 1 ? 's' : '') + ' × 2 (blank + filled) zipped → ' + zipName, 'ok');
+    setStatus(pageCount + ' page' + (pageCount > 1 ? 's' : '') + ' × 3 (blank + filled + KEY) zipped → ' + zipName, 'ok');
   };
 
   /* ──────────────────────────────────────────────────────────────
