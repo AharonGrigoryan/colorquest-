@@ -1404,6 +1404,12 @@
   /* ---------- Drawing (template + filled mode) ---------- */
   /* `labels` is optional — when provided (KDP mode), use these instead of v+1.
      For non-KDP modes, the cell shows the palette index + 1 as a number. */
+  /* relative luminance (0..1) to pick black/white text on a swatch */
+  function luminance(rgb) {
+    const [r, g, b] = rgb.map(v => v / 255);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
   function drawGrid(ctx, grid, palette, ox, oy, cell, shape, bg, fontPt, mode, labels) {
     const isFilled = mode === 'filled';
     const stroke = bg === '#fff' ? '#000' : '#fff';
@@ -1531,11 +1537,88 @@
     right.appendChild(meta);
     const tplBtn = document.createElement('button'); tplBtn.className = 'toggle on'; tplBtn.textContent = 'Template';
     const fillBtn = document.createElement('button'); fillBtn.className = 'toggle'; fillBtn.textContent = 'Filled';
-    right.appendChild(tplBtn); right.appendChild(fillBtn);
+    const editBtn = document.createElement('button'); editBtn.className = 'toggle'; editBtn.textContent = '✏ Edit';
+    right.appendChild(tplBtn); right.appendChild(fillBtn); right.appendChild(editBtn);
     head.appendChild(right);
     block.appendChild(head);
+
+    /* ── Edit toolbar (hidden until Edit mode is on) ───────────────── */
+    const editBar = document.createElement('div');
+    editBar.className = 'edit-bar';
+    editBar.style.cssText = 'display:none;gap:6px;flex-wrap:wrap;align-items:center;margin:8px 0;padding:10px;background:#0d0d14;border:1px solid var(--line);border-radius:8px;';
+    const editState = { color: null }; // selected palette index, or 'white'
+    let editZoom = 1;                  // edit-mode zoom factor (1 = fit width)
+    let editView = 'template';         // 'template' (numbers) or 'filled' (colors) while editing
+    const whiteIdx = COLORQUEST_PALETTE.findIndex(c => c.label === '');
+
+    const editLabel = document.createElement('span');
+    editLabel.style.cssText = "font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-dim);letter-spacing:.04em;width:100%;";
+    editLabel.textContent = 'Pick a color, then tap a cell to change it:';
+    editBar.appendChild(editLabel);
+
+    /* one swatch button per palette color actually available, plus White (erase) */
+    COLORQUEST_PALETTE.forEach((pc, i) => {
+      const b = document.createElement('button');
+      const isWhite = pc.label === '';
+      b.title = pc.name + (isWhite ? ' (blank)' : ' · ' + pc.label);
+      b.style.cssText = 'width:30px;height:30px;border-radius:6px;border:2px solid transparent;cursor:pointer;padding:0;position:relative;background:rgb(' + pc.rgb.join(',') + ');' + (isWhite ? 'box-shadow:inset 0 0 0 1px #ccc;' : '');
+      if (isWhite) b.innerHTML = '<span style="position:absolute;inset:0;display:grid;place-items:center;font-size:9px;color:#888;font-family:monospace;">∅</span>';
+      else b.innerHTML = '<span style="position:absolute;inset:0;display:grid;place-items:center;font-size:11px;font-weight:600;color:' + (luminance(pc.rgb) > 0.5 ? '#000' : '#fff') + ';font-family:JetBrains Mono,monospace;">' + pc.label + '</span>';
+      b.onclick = () => {
+        editState.color = i;
+        editBar.querySelectorAll('button').forEach(x => x.style.borderColor = 'transparent');
+        b.style.borderColor = 'var(--accent)';
+      };
+      editBar.appendChild(b);
+    });
+
+    /* view toggle: edit while seeing numbers, or while seeing real colors */
+    const viewWrap = document.createElement('span');
+    viewWrap.style.cssText = 'display:inline-flex;gap:4px;align-items:center;';
+    const mkView = (txt, val) => {
+      const v = document.createElement('button');
+      v.textContent = txt;
+      v.dataset.view = val;
+      v.style.cssText = "padding:6px 10px;border-radius:6px;border:1px solid var(--line);background:#08080d;color:var(--ink-dim);cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.04em;";
+      v.onclick = () => {
+        editView = val;
+        viewWrap.querySelectorAll('button').forEach(x => { x.style.background = '#08080d'; x.style.color = 'var(--ink-dim)'; x.style.borderColor = 'var(--line)'; });
+        v.style.background = 'rgba(255,203,71,0.10)'; v.style.color = 'var(--accent)'; v.style.borderColor = 'var(--accent)';
+        renderMode(editView);
+      };
+      return v;
+    };
+    const vNum = mkView('123 Numbers', 'template');
+    const vCol = mkView('🎨 Colors', 'filled');
+    vNum.style.background = 'rgba(255,203,71,0.10)'; vNum.style.color = 'var(--accent)'; vNum.style.borderColor = 'var(--accent)';
+    viewWrap.appendChild(vNum); viewWrap.appendChild(vCol);
+    editBar.appendChild(viewWrap);
+
+    /* zoom controls (mouse wheel also works; buttons help on touch) */
+    const zoomWrap = document.createElement('span');
+    zoomWrap.style.cssText = 'display:inline-flex;gap:4px;align-items:center;margin-left:auto;';
+    const mkZ = (txt, fn) => {
+      const z = document.createElement('button');
+      z.textContent = txt;
+      z.style.cssText = "width:30px;height:30px;border-radius:6px;border:1px solid var(--line);background:#08080d;color:var(--ink);cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:13px;";
+      z.onclick = fn;
+      return z;
+    };
+    const zLabel = document.createElement('span');
+    zLabel.style.cssText = "font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-dim);min-width:34px;text-align:center;";
+    const updateZoomLabel = () => { zLabel.textContent = Math.round(editZoom * 100) + '%'; };
+    const applyZoom = (z) => { editZoom = Math.max(1, Math.min(6, z)); updateZoomLabel(); renderMode('template'); };
+    zoomWrap.appendChild(mkZ('−', () => applyZoom(editZoom - 0.5)));
+    zoomWrap.appendChild(zLabel);
+    zoomWrap.appendChild(mkZ('+', () => applyZoom(editZoom + 0.5)));
+    zoomWrap.appendChild(mkZ('⊡', () => applyZoom(1))); // reset to fit
+    editBar.appendChild(zoomWrap);
+    updateZoomLabel();
+    block.appendChild(editBar);
+
     const stage = document.createElement('div'); stage.className = 'stage';
     block.appendChild(stage);
+    let editMode = false;
     const renderMode = (mode) => {
       stage.innerHTML = '';
       /* FIX: always render with the shape the grid was GENERATED with
@@ -1548,7 +1631,23 @@
       const H = Math.ceil(gh * cellPx * yPitch) + 20;
       const c = document.createElement('canvas');
       c.width = W * dpr; c.height = H * dpr;
-      c.style.width = W + 'px'; c.style.height = H + 'px';
+      /* In edit mode, scale the whole canvas uniformly by editZoom so small
+         cells are easy to see and tap. We must override the global
+         `.stage canvas { max-width:100%; height:auto }` rule — otherwise the
+         width gets clamped while height auto-scales, distorting every cell
+         into an oval. Setting both explicitly + max-width:none keeps the
+         puzzle's true aspect ratio. The stage has overflow:auto for panning,
+         and click math uses getBoundingClientRect, so taps stay accurate. */
+      if (editMode) {
+        const zw = W * editZoom, zh = H * editZoom;
+        c.style.width = zw + 'px';
+        c.style.height = zh + 'px';
+        c.style.maxWidth = 'none';
+        c.style.maxHeight = 'none';
+      } else {
+        c.style.width = W + 'px';
+        c.style.height = H + 'px';
+      }
       const ctx = c.getContext('2d');
       ctx.scale(dpr, dpr);
       const bg = $('bgMode').value === 'white' ? '#fff' : '#000';
@@ -1557,9 +1656,77 @@
       const labels = kdpMode ? COLORQUEST_PALETTE.map(c => c.label) : null;
       drawGrid(ctx, grid, palette, 10, 10, cellPx, shape, bg, fontPt, mode, labels);
       stage.appendChild(c);
+
+      /* In edit mode, clicking a cell repaints it with the selected color */
+      if (editMode) {
+        c.style.cursor = 'crosshair';
+        c.onclick = (ev) => {
+          if (editState.color == null) { setStatus('Pick a color first (in the edit bar).', 'err'); return; }
+          const rect = c.getBoundingClientRect();
+          const px = (ev.clientX - rect.left) * (W / rect.width) - 10;
+          const py = (ev.clientY - rect.top)  * (H / rect.height) - 10;
+          const hit = hitTestCell(px, py, gw, gh, cellPx, shape);
+          if (!hit) return;
+          grid[hit.y][hit.x] = editState.color;
+          /* keep usedSet in sync so legend/exports reflect the edit */
+          if (result.usedSet) { result.usedSet.add(editState.color); }
+          renderMode(editView); // stay in the chosen view (numbers or colors)
+        };
+        /* mouse wheel = zoom in/out (keeps the point under the cursor steady) */
+        c.onwheel = (ev) => {
+          ev.preventDefault();
+          const before = editZoom;
+          const dir = ev.deltaY < 0 ? 0.25 : -0.25;
+          editZoom = Math.max(1, Math.min(6, +(editZoom + dir).toFixed(2)));
+          if (editZoom === before) return;
+          updateZoomLabel();
+          /* preserve scroll focus around the cursor */
+          const rect = c.getBoundingClientRect();
+          const relX = (ev.clientX - rect.left) / rect.width;
+          const relY = (ev.clientY - rect.top) / rect.height;
+          renderMode(editView);
+          const nc = stage.querySelector('canvas');
+          if (nc) {
+            const nw = nc.offsetWidth, nh = nc.offsetHeight;
+            stage.scrollLeft = relX * nw - stage.clientWidth / 2;
+            stage.scrollTop  = relY * nh - stage.clientHeight / 2;
+          }
+        };
+      }
     };
-    tplBtn.onclick = () => { tplBtn.classList.add('on'); fillBtn.classList.remove('on'); renderMode('template'); };
-    fillBtn.onclick = () => { fillBtn.classList.add('on'); tplBtn.classList.remove('on'); renderMode('filled'); };
+
+    /* pixel (relative to grid origin) → {x,y} cell index, honoring offset rows */
+    function hitTestCell(px, py, gw, gh, cell, shape) {
+      const yPitch = shapeYPitch(shape);
+      const offset = shapeHasOffset(shape);
+      let best = null, bestD = Infinity;
+      // search the 2-3 candidate rows near py for the nearest cell center
+      const approxRow = Math.floor(py / (cell * yPitch));
+      for (let y = Math.max(0, approxRow - 1); y <= Math.min(gh - 1, approxRow + 1); y++) {
+        const rowOffset = offset ? (y % 2) * cell * 0.5 : 0;
+        const cy = y * cell * yPitch + cell / 2;
+        for (let x = 0; x < gw; x++) {
+          const cx = x * cell + cell / 2 + rowOffset;
+          const d = (px - cx) ** 2 + (py - cy) ** 2;
+          if (d < bestD) { bestD = d; best = { x, y }; }
+        }
+      }
+      // ignore clicks well outside any cell
+      if (best && bestD <= (cell * 0.7) ** 2) return best;
+      return null;
+    }
+
+    tplBtn.onclick = () => { editMode = false; editBar.style.display = 'none'; stage.style.maxHeight = ''; tplBtn.classList.add('on'); fillBtn.classList.remove('on'); editBtn.classList.remove('on'); renderMode('template'); };
+    fillBtn.onclick = () => { editMode = false; editBar.style.display = 'none'; stage.style.maxHeight = ''; fillBtn.classList.add('on'); tplBtn.classList.remove('on'); editBtn.classList.remove('on'); renderMode('filled'); };
+    editBtn.onclick = () => {
+      editMode = true;
+      editBar.style.display = 'flex';
+      editBtn.classList.add('on'); tplBtn.classList.remove('on'); fillBtn.classList.remove('on');
+      stage.style.maxHeight = '70vh';   // cap height so zoomed puzzle scrolls
+      stage.style.resize = 'vertical';
+      renderMode(editView);
+      setStatus('Edit mode: pick a color, tap a cell to paint. Toggle 123/🎨 to edit on numbers or colors. Scroll to zoom.', 'ok');
+    };
     renderMode('template');
     const leg = document.createElement('div'); leg.className = 'legend';
     if (kdpMode) {
